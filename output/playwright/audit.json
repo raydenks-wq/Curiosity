@@ -1,0 +1,332 @@
+[
+  {
+    "view": "desktop",
+    "template": "ocean",
+    "route": "dashboard",
+    "overflow": {
+      "x": false,
+      "y": true,
+      "scrollWidth": 1600,
+      "clientWidth": 1600
+    }
+  },
+  {
+    "view": "desktop",
+    "template": "ocean",
+    "route": "course",
+    "overflow": {
+      "x": false,
+      "y": false,
+      "scrollWidth": 1600,
+      "clientWidth": 1600
+    }
+  },
+  {
+    "view": "desktop",
+    "template": "ocean",
+    "route": "quiz",
+    "overflow": {
+      "x": false,
+      "y": false,
+      "scrollWidth": 1600,
+      "clientWidth": 1600
+    }
+  },
+  {
+    "view": "desktop",
+    "template": "sunrise",
+    "route": "dashboard",
+    "overflow": {
+      "x": false,
+      "y": true,
+      "scrollWidth": 1600,
+      "clientWidth": 1600
+    }
+  },
+  {
+    "view": "desktop",
+    "template": "sunrise",
+    "route": "course",
+    "overflow": {
+      "x": false,
+      "y": false,
+      "scrollWidth": 1600,
+      "clientWidth": 1600
+    }
+  },
+  {
+    "view": "desktop",
+    "template": "sunrise",
+    "route": "quiz",
+    "overflow": {
+      "x": false,
+      "y": true,
+      "scrollWidth": 1600,
+      "clientWidth": 1600
+    }
+  },
+  {
+    "view": "desktop",
+    "template": "graphite",
+    "route": "dashboard",
+    "overflow": {
+      "x": false,
+      "y": true,
+      "scrollWidth": 1600,
+      "clientWidth": 1600
+    }
+  },
+  {
+    "view": "desktop",
+    "template": "graphite",
+    "route": "course",
+    "overflow": {
+      "x": false,
+      "y": false,
+      "scrollWidth": 1600,
+      "clientWidth": 1600
+    }
+  },
+  {
+    "view": "desktop",
+    "template": "graphite",
+    "route": "quiz",
+    "overflow": {
+      "x": false,
+      "y": true,
+      "scrollWidth": 1600,
+      "clientWidth": 1600
+    }
+  },
+  {
+    "view": "desktop",
+    "template": "neon",
+    "route": "dashboard",
+    "overflow": {
+      "x": false,
+      "y": true,
+      "scrollWidth": 1600,
+      "clientWidth": 1600
+    }
+  },
+  {
+    "view": "desktop",
+    "template": "neon",
+    "route": "course",
+    "overflow": {
+      "x": false,
+      "y": true,
+      "scrollWidth": 1600,
+      "clientWidth": 1600
+    }
+  },
+  {
+    "view": "desktop",
+    "template": "neon",
+    "route": "quiz",
+    "overflow": {
+      "x": false,
+      "y": false,
+      "scrollWidth": 1600,
+      "clientWidth": 1600
+    }
+  },
+  {
+    "view": "desktop",
+    "template": "paper",
+    "route": "dashboard",
+    "overflow": {
+      "x": false,
+      "y": true,
+      "scrollWidth": 1600,
+      "clientWidth": 1600
+    }
+  },
+  {
+    "view": "desktop",
+    "template": "paper",
+    "route": "course",
+    "overflow": {
+      "x": false,
+      "y": true,
+      "scrollWidth": 1600,
+      "clientWidth": 1600
+    }
+  },
+  {
+    "view": "desktop",
+    "template": "paper",
+    "route": "quiz",
+    "overflow": {
+      "x": false,
+      "y": true,
+      "scrollWidth": 1600,
+      "clientWidth": 1600
+    }
+  },
+  {
+    "view": "mobile",
+    "template": "ocean",
+    "route": "dashboard",
+    "overflow": {
+      "x": false,
+      "y": true,
+      "scrollWidth": 390,
+      "clientWidth": 390
+    }
+  },
+  {
+    "view": "mobile",
+    "template": "ocean",
+    "route": "course",
+    "overflow": {
+      "x": false,
+      "y": true,
+      "scrollWidth": 390,
+      "clientWidth": 390
+    }
+  },
+  {
+    "view": "mobile",
+    "template": "ocean",
+    "route": "quiz",
+    "overflow": {
+      "x": false,
+      "y": true,
+      "scrollWidth": 390,
+      "clientWidth": 390
+    }
+  },
+  {
+    "view": "mobile",
+    "template": "sunrise",
+    "route": "dashboard",
+    "overflow": {
+      "x": false,
+      "y": true,
+      "scrollWidth": 390,
+      "clientWidth": 390
+    }
+  },
+  {
+    "view": "mobile",
+    "template": "sunrise",
+    "route": "course",
+    "overflow": {
+      "x": false,
+      "y": true,
+      "scrollWidth": 390,
+      "clientWidth": 390
+    }
+  },
+  {
+    "view": "mobile",
+    "template": "sunrise",
+    "route": "quiz",
+    "overflow": {
+      "x": false,
+      "y": true,
+      "scrollWidth": 390,
+      "clientWidth": 390
+    }
+  },
+  {
+    "view": "mobile",
+    "template": "graphite",
+    "route": "dashboard",
+    "overflow": {
+      "x": false,
+      "y": true,
+      "scrollWidth": 390,
+      "clientWidth": 390
+    }
+  },
+  {
+    "view": "mobile",
+    "template": "graphite",
+    "route": "course",
+    "overflow": {
+      "x": false,
+      "y": true,
+      "scrollWidth": 390,
+      "clientWidth": 390
+    }
+  },
+  {
+    "view": "mobile",
+    "template": "graphite",
+    "route": "quiz",
+    "overflow": {
+      "x": false,
+      "y": true,
+      "scrollWidth": 390,
+      "clientWidth": 390
+    }
+  },
+  {
+    "view": "mobile",
+    "template": "neon",
+    "route": "dashboard",
+    "overflow": {
+      "x": false,
+      "y": true,
+      "scrollWidth": 390,
+      "clientWidth": 390
+    }
+  },
+  {
+    "view": "mobile",
+    "template": "neon",
+    "route": "course",
+    "overflow": {
+      "x": false,
+      "y": true,
+      "scrollWidth": 390,
+      "clientWidth": 390
+    }
+  },
+  {
+    "view": "mobile",
+    "template": "neon",
+    "route": "quiz",
+    "overflow": {
+      "x": false,
+      "y": true,
+      "scrollWidth": 390,
+      "clientWidth": 390
+    }
+  },
+  {
+    "view": "mobile",
+    "template": "paper",
+    "route": "dashboard",
+    "overflow": {
+      "x": false,
+      "y": true,
+      "scrollWidth": 390,
+      "clientWidth": 390
+    }
+  },
+  {
+    "view": "mobile",
+    "template": "paper",
+    "route": "course",
+    "overflow": {
+      "x": false,
+      "y": true,
+      "scrollWidth": 390,
+      "clientWidth": 390
+    }
+  },
+  {
+    "view": "mobile",
+    "template": "paper",
+    "route": "quiz",
+    "overflow": {
+      "x": false,
+      "y": true,
+      "scrollWidth": 390,
+      "clientWidth": 390
+    }
+  }
+]
