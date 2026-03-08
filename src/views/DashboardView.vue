@@ -1,5 +1,5 @@
 <template>
-  <section class="dashboard-grid">
+  <section v-if="currentTemplate === 'sunrise'" class="dashboard-grid">
     <article class="hero-card dashboard-hero">
       <p class="eyebrow">Continue Learning</p>
       <h2>UX Research Essentials</h2>
@@ -47,6 +47,64 @@
 
     <TemplateDashboardWidget class="full-width dashboard-template-widget" />
   </section>
+
+  <section v-else class="dashboard-alt aurora-layout">
+    <article class="hero-card aurora-hero">
+      <p class="eyebrow">Learning Command Center</p>
+      <h2>UX Research Essentials</h2>
+      <p class="hero-meta">Lesson 4 dari 8 - User interview framework</p>
+      <TemplateHeroArt />
+      <div class="hero-actions">
+        <RouterLink to="/courses/ui-101" class="primary-btn">Resume Class</RouterLink>
+        <button class="ghost-btn" type="button">Open Study Plan</button>
+      </div>
+    </article>
+
+    <article class="card aurora-kpi">
+      <h3>Progress Radar</h3>
+      <div class="aurora-kpi-grid">
+        <div>
+          <p class="muted">Mingguan</p>
+          <p class="stat-big">{{ weeklyProgress }}%</p>
+        </div>
+        <div>
+          <p class="muted">Growth</p>
+          <p class="stat-big">+{{ weeklyGain }}%</p>
+        </div>
+      </div>
+    </article>
+
+    <article class="card aurora-timeline">
+      <h3>Timeline Hari Ini</h3>
+      <ul class="activity-list">
+        <li>09:00 - Review feedback mentor</li>
+        <li>13:00 - Kerjakan quiz UI Dasar</li>
+        <li>20:00 - Sesi diskusi komunitas</li>
+      </ul>
+    </article>
+
+    <article class="card aurora-courses">
+      <div class="section-header">
+        <h3>Course Pipeline</h3>
+        <span class="muted">3 aktif</span>
+      </div>
+      <div class="course-strip">
+        <RouterLink
+          v-for="course in displayCourses"
+          :key="course.id"
+          :to="`/courses/${course.id}`"
+          class="course-strip-item"
+        >
+          <div class="strip-color" :style="{ background: course.gradient }"></div>
+          <h4>{{ course.title }}</h4>
+          <p>{{ course.description }}</p>
+          <strong>{{ course.progress }}%</strong>
+        </RouterLink>
+      </div>
+    </article>
+
+    <TemplateDashboardWidget class="aurora-widget" />
+  </section>
 </template>
 
 <script setup>
@@ -54,6 +112,9 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import CourseCard from '../components/CourseCard.vue'
 import TemplateDashboardWidget from '../components/template/TemplateDashboardWidget.vue'
 import TemplateHeroArt from '../components/template/TemplateHeroArt.vue'
+import { useTemplateSwitcher } from '../plugins/templateSwitcher'
+
+const { currentTemplate } = useTemplateSwitcher()
 
 const courses = [
   {

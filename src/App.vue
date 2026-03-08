@@ -1,6 +1,7 @@
 <template>
   <div class="app-shell" :class="`template-${currentTemplate}`">
     <TopNav />
+    <GlobalToasts />
 
     <div class="main-region">
       <TopBar />
@@ -20,17 +21,15 @@ import { computed } from 'vue'
 import { RouterView } from 'vue-router'
 import TopNav from './components/TopNav.vue'
 import TopBar from './components/TopBar.vue'
+import GlobalToasts from './components/GlobalToasts.vue'
 import { useTemplateSwitcher } from './plugins/templateSwitcher'
 
 const { currentTemplate } = useTemplateSwitcher()
 
 const transitionMap = {
-  ocean: 'route-wave',
+  aurora: 'route-aurora',
   sunrise: 'route-mosaic',
-  graphite: 'route-panel',
-  neon: 'route-neon',
-  paper: 'route-paper',
 }
 
-const routeTransitionName = computed(() => transitionMap[currentTemplate.value] ?? 'route-wave')
+const routeTransitionName = computed(() => transitionMap[currentTemplate.value] ?? 'route-mosaic')
 </script>

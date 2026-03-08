@@ -5,29 +5,14 @@ const STORAGE_KEY = 'curiosity:lms:template'
 
 const templateOptions = [
   {
-    id: 'ocean',
-    label: 'Ocean Flow',
-    summary: 'Balanced dashboard dengan fokus progress.',
+    id: 'aurora',
+    label: 'Aurora Grid',
+    summary: 'Split workspace modern dengan kartu data bertingkat.',
   },
   {
     id: 'sunrise',
     label: 'Sunrise Mosaic',
     summary: 'Mosaic cards asimetris, nuansa kreatif.',
-  },
-  {
-    id: 'graphite',
-    label: 'Graphite Pro',
-    summary: 'Panel layout dua kolom, gaya enterprise.',
-  },
-  {
-    id: 'neon',
-    label: 'Neon Sprint',
-    summary: 'Bento grid dinamis ala bootcamp.',
-  },
-  {
-    id: 'paper',
-    label: 'Paper Classroom',
-    summary: 'Editorial layout, gaya modul akademik.',
   },
 ]
 
@@ -40,7 +25,7 @@ const applyTemplate = (id) => {
 
 export const createTemplateSwitcher = () => ({
   install(app) {
-    const currentTemplate = ref('ocean')
+    const currentTemplate = ref('sunrise')
 
     const setTemplate = (id) => {
       if (!isValidTemplate(id)) return

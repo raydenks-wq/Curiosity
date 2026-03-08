@@ -1,5 +1,5 @@
 <template>
-  <section class="quiz-layout">
+  <section v-if="currentTemplate === 'sunrise'" class="quiz-layout">
     <article class="card full-width quiz-header-card">
       <div class="section-header">
         <h2>Quiz: UI Design Fundamentals</h2>
@@ -26,10 +26,45 @@
 
     <TemplateQuizWidget class="full-width" />
   </section>
+
+  <section v-else class="quiz-alt aurora-quiz">
+    <article class="card aurora-quiz-header">
+      <div class="section-header">
+        <h2>Quiz Control Room</h2>
+        <span class="pill">10 pertanyaan</span>
+      </div>
+      <p class="muted">Mode review cepat dengan panel navigasi samping.</p>
+    </article>
+
+    <article class="card aurora-question" v-for="(question, index) in questions" :key="question.id">
+      <p class="eyebrow">Q{{ index + 1 }}</p>
+      <h3>{{ question.title }}</h3>
+      <div class="options">
+        <label v-for="option in question.options" :key="option" class="option-row">
+          <input type="radio" :name="question.id" />
+          <span>{{ option }}</span>
+        </label>
+      </div>
+    </article>
+
+    <article class="card aurora-quiz-side">
+      <h3>Quick Nav</h3>
+      <div class="mosaic-grid">
+        <button v-for="n in 10" :key="n" type="button" class="ghost-btn">#{{ n }}</button>
+      </div>
+      <div class="hero-actions">
+        <button class="ghost-btn" type="button">Save Draft</button>
+        <button class="primary-btn" type="button">Submit</button>
+      </div>
+    </article>
+  </section>
 </template>
 
 <script setup>
 import TemplateQuizWidget from '../components/template/TemplateQuizWidget.vue'
+import { useTemplateSwitcher } from '../plugins/templateSwitcher'
+
+const { currentTemplate } = useTemplateSwitcher()
 
 const questions = [
   {

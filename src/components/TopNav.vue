@@ -77,9 +77,9 @@
     <transition name="drop-fade">
       <div v-if="activePanel === 'profile'" class="panel panel-profile">
         <p class="panel-title">Akun Saya</p>
-        <button type="button">My Profile</button>
-        <button type="button">Certificates</button>
-        <button type="button">Settings</button>
+        <button type="button" @click="goToProfileSection('overview')">My Profile</button>
+        <button type="button" @click="goToProfileSection('certificates')">Certificates</button>
+        <button type="button" @click="goToProfileSection('security')">Settings</button>
         <button type="button" class="danger">Sign Out</button>
       </div>
     </transition>
@@ -88,10 +88,15 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { storeToRefs } from 'pinia'
+import { useRoute, useRouter } from 'vue-router'
 import { useTemplateSwitcher } from '../plugins/templateSwitcher'
+import { useProfileStore } from '../stores/profile'
 
 const route = useRoute()
+const router = useRouter()
+const profileStore = useProfileStore()
+const { profile } = storeToRefs(profileStore)
 const topnavRoot = ref(null)
 const isMenuOpen = ref(false)
 const activePanel = ref(null)
@@ -102,19 +107,21 @@ const navLabels = [
   { label: 'Dashboard', to: '/' },
   { label: 'Course Detail', to: '/courses/ui-101' },
   { label: 'Quiz', to: '/quiz/ui-101' },
+  { label: 'Profile', to: '/profile' },
 ]
 
+const adminOnlyNav = [{ label: 'Users', to: '/users' }]
+
 const iconMap = {
-  ocean: ['◉', '◈', '◌'],
-  sunrise: ['☀', '✦', '✎'],
-  graphite: ['▣', '▤', '▥'],
-  neon: ['⬢', '✶', '⬡'],
-  paper: ['§', '¶', '✒'],
+  aurora: ['◉', '◈', '◌', '◎', '◍'],
+  sunrise: ['☀', '✦', '✎', '☺', '✿'],
 }
 
 const navItems = computed(() => {
-  const icons = iconMap[currentTemplate.value] ?? iconMap.ocean
-  return navLabels.map((item, index) => ({
+  const icons = iconMap[currentTemplate.value] ?? iconMap.sunrise
+  const labels =
+    profile.value?.accessRole === 'admin' ? [...navLabels, ...adminOnlyNav] : [...navLabels]
+  return labels.map((item, index) => ({
     ...item,
     icon: icons[index] ?? '•',
   }))
@@ -126,6 +133,11 @@ const togglePanel = (panel) => {
 
 const selectTemplate = (id) => {
   setTemplate(id)
+  activePanel.value = null
+}
+
+const goToProfileSection = (tab) => {
+  router.push({ name: 'profile', query: { tab } })
   activePanel.value = null
 }
 
@@ -145,6 +157,7 @@ watch(
 )
 
 onMounted(() => {
+  profileStore.load()
   document.addEventListener('click', onClickOutside)
 })
 
