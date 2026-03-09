@@ -1,0 +1,282 @@
+{
+  "users": [
+    {
+      "id": "u-001",
+      "name": "Indra Permana",
+      "email": "indra@curiosity.app",
+      "role": "admin",
+      "status": "active",
+      "lastLogin": "2026-03-09 08:20"
+    },
+    {
+      "id": "u-002",
+      "name": "Ayu Pratama",
+      "email": "ayu@curiosity.app",
+      "role": "instructor",
+      "status": "active",
+      "lastLogin": "2026-03-08 21:17"
+    },
+    {
+      "id": "u-003",
+      "name": "Raka Wijaya",
+      "email": "raka@curiosity.app",
+      "role": "student",
+      "status": "active",
+      "lastLogin": "2026-03-08 19:44"
+    },
+    {
+      "id": "u-004",
+      "name": "Nadia Putri",
+      "email": "nadia@curiosity.app",
+      "role": "student",
+      "status": "suspended",
+      "lastLogin": "2026-03-03 11:08"
+    }
+  ],
+  "credentials": {
+    "indra@curiosity.app": "$2b$10$Qw91mDRqfZWYeChFTZO1s.qgyEb13NtdAcVp7Jy2YvYV3mYuUmrOO",
+    "ayu@curiosity.app": "$2b$10$7gHRb45dodhlHkbBQXkl0OGbQ7yq933tgxUnRNF/Q1CB85rw9VfOK",
+    "raka@curiosity.app": "$2b$10$i94Q32tWkBzL0l/q2nrEseUEbAZSqObN8XB2GKYvQqSFHmqXletqm"
+  },
+  "permissionMatrix": {
+    "admin": {
+      "viewDashboard": true,
+      "manageCourse": true,
+      "manageQuiz": true,
+      "manageUsers": true
+    },
+    "instructor": {
+      "viewDashboard": true,
+      "manageCourse": true,
+      "manageQuiz": true,
+      "manageUsers": false
+    },
+    "student": {
+      "viewDashboard": true,
+      "manageCourse": false,
+      "manageQuiz": false,
+      "manageUsers": false
+    }
+  },
+  "profiles": {
+    "u-001": {
+      "profile": {
+        "name": "Indra Permana",
+        "email": "indra@curiosity.app",
+        "role": "Admin",
+        "accessRole": "admin",
+        "timezone": "Asia/Jakarta",
+        "avatarDataUrl": "",
+        "bio": "Belajar design systems dan frontend untuk membangun pengalaman belajar yang menarik."
+      },
+      "preferences": {
+        "deadlineNotif": true,
+        "discussionNotif": true,
+        "productUpdateNotif": false,
+        "language": "id",
+        "themeId": "aurora"
+      },
+      "stats": {
+        "streakDays": 12,
+        "coursesCompleted": 7,
+        "learningHours": 146
+      },
+      "certificates": [
+        {
+          "title": "UI Design Fundamentals",
+          "issuedAt": "12 Feb 2026"
+        },
+        {
+          "title": "UX Research Essentials",
+          "issuedAt": "18 Jan 2026"
+        }
+      ],
+      "badges": [
+        "Streak 12 Days",
+        "Quiz Master",
+        "Mentor Choice"
+      ],
+      "progressMetrics": [
+        {
+          "label": "Design Track",
+          "value": 78
+        },
+        {
+          "label": "Frontend Track",
+          "value": 62
+        },
+        {
+          "label": "Product Track",
+          "value": 83
+        }
+      ]
+    },
+    "u-002": {
+      "profile": {
+        "name": "Ayu Pratama",
+        "email": "ayu@curiosity.app",
+        "role": "Instructor",
+        "accessRole": "instructor",
+        "timezone": "Asia/Jakarta",
+        "avatarDataUrl": "",
+        "bio": "Belajar design systems dan frontend untuk membangun pengalaman belajar yang menarik."
+      },
+      "preferences": {
+        "deadlineNotif": true,
+        "discussionNotif": true,
+        "productUpdateNotif": false,
+        "language": "id",
+        "themeId": "aurora"
+      },
+      "stats": {
+        "streakDays": 12,
+        "coursesCompleted": 7,
+        "learningHours": 146
+      },
+      "certificates": [
+        {
+          "title": "UI Design Fundamentals",
+          "issuedAt": "12 Feb 2026"
+        },
+        {
+          "title": "UX Research Essentials",
+          "issuedAt": "18 Jan 2026"
+        }
+      ],
+      "badges": [
+        "Streak 12 Days",
+        "Quiz Master",
+        "Mentor Choice"
+      ],
+      "progressMetrics": [
+        {
+          "label": "Design Track",
+          "value": 78
+        },
+        {
+          "label": "Frontend Track",
+          "value": 62
+        },
+        {
+          "label": "Product Track",
+          "value": 83
+        }
+      ]
+    },
+    "u-003": {
+      "profile": {
+        "name": "Raka Wijaya",
+        "email": "raka@curiosity.app",
+        "role": "Student",
+        "accessRole": "student",
+        "timezone": "Asia/Jakarta",
+        "avatarDataUrl": "",
+        "bio": "Belajar design systems dan frontend untuk membangun pengalaman belajar yang menarik."
+      },
+      "preferences": {
+        "deadlineNotif": true,
+        "discussionNotif": true,
+        "productUpdateNotif": false,
+        "language": "id",
+        "themeId": "aurora"
+      },
+      "stats": {
+        "streakDays": 12,
+        "coursesCompleted": 7,
+        "learningHours": 146
+      },
+      "certificates": [
+        {
+          "title": "UI Design Fundamentals",
+          "issuedAt": "12 Feb 2026"
+        },
+        {
+          "title": "UX Research Essentials",
+          "issuedAt": "18 Jan 2026"
+        }
+      ],
+      "badges": [
+        "Streak 12 Days",
+        "Quiz Master",
+        "Mentor Choice"
+      ],
+      "progressMetrics": [
+        {
+          "label": "Design Track",
+          "value": 78
+        },
+        {
+          "label": "Frontend Track",
+          "value": 62
+        },
+        {
+          "label": "Product Track",
+          "value": 83
+        }
+      ]
+    },
+    "u-004": {
+      "profile": {
+        "name": "Nadia Putri",
+        "email": "nadia@curiosity.app",
+        "role": "Student",
+        "accessRole": "student",
+        "timezone": "Asia/Jakarta",
+        "avatarDataUrl": "",
+        "bio": "Belajar design systems dan frontend untuk membangun pengalaman belajar yang menarik."
+      },
+      "preferences": {
+        "deadlineNotif": true,
+        "discussionNotif": true,
+        "productUpdateNotif": false,
+        "language": "id",
+        "themeId": "aurora"
+      },
+      "stats": {
+        "streakDays": 12,
+        "coursesCompleted": 7,
+        "learningHours": 146
+      },
+      "certificates": [
+        {
+          "title": "UI Design Fundamentals",
+          "issuedAt": "12 Feb 2026"
+        },
+        {
+          "title": "UX Research Essentials",
+          "issuedAt": "18 Jan 2026"
+        }
+      ],
+      "badges": [
+        "Streak 12 Days",
+        "Quiz Master",
+        "Mentor Choice"
+      ],
+      "progressMetrics": [
+        {
+          "label": "Design Track",
+          "value": 78
+        },
+        {
+          "label": "Frontend Track",
+          "value": 62
+        },
+        {
+          "label": "Product Track",
+          "value": 83
+        }
+      ]
+    }
+  },
+  "revokedTokens": [],
+  "auditLogs": [
+    {
+      "id": "audit-4kdi3ks",
+      "actor": "system",
+      "action": "seed_data",
+      "target": "bootstrap",
+      "detail": "Initial database seeded.",
+      "timestamp": "2026-03-09 10:42"
+    }
+  ]
+}

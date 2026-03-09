@@ -8,11 +8,14 @@
     "server": "node server/index.js",
     "server:dev": "node --watch server/index.js",
     "test:server": "vitest run server",
+    "test:e2e": "node tests/e2e/course-player.e2e.mjs",
     "test:server:coverage": "vitest run server --coverage --coverage.reporter=text --coverage.reporter=lcov --coverage.reportsDirectory=coverage/server --coverage.thresholds.lines=90 --coverage.thresholds.functions=85 --coverage.thresholds.statements=90 --coverage.thresholds.branches=75",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1004.0",
+    "@aws-sdk/s3-request-presigner": "^3.1004.0",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
     "express": "^5.2.1",
@@ -27,6 +30,7 @@
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.2",
     "@vitest/coverage-v8": "^4.0.18",
+    "playwright": "^1.58.2",
     "supertest": "^7.2.2",
     "vite": "^7.3.1",
     "vitest": "^4.0.18"

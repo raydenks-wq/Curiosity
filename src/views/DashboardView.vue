@@ -7,6 +7,7 @@
         {{ heroCourse.activeLessonTitle || 'Mulai lesson pertama' }} - {{ heroCourse.completedLessons }}/{{ heroCourse.totalLessons }}
         selesai
       </p>
+      <p v-if="heroCourse.nextLockReason" class="hero-lock-hint">{{ heroCourse.nextLockReason }}</p>
       <TemplateHeroArt />
       <div class="hero-actions">
         <RouterLink :to="toCourseRoute(heroCourse)" class="primary-btn">Resume Class</RouterLink>
@@ -17,7 +18,7 @@
     <article class="card stat-card dashboard-progress">
       <h3>Progress Mingguan</h3>
       <p class="stat-big">{{ weeklyProgress }}%</p>
-      <p class="muted">+{{ weeklyGain }}% dibanding minggu lalu</p>
+      <p class="muted">Study {{ weeklyStudyMinutes }} menit · +{{ weeklyGain }}% dibanding periode sebelumnya</p>
       <p class="stat-live"><span></span> Live update</p>
     </article>
 
@@ -46,6 +47,14 @@
         <li>Kamu menyelesaikan modul "Wireframing Essentials".</li>
         <li>Diskusi baru: "Best practice design system".</li>
       </ul>
+      <div v-if="analyticsWarnings.length" class="warning-list-block">
+        <p class="eyebrow">Early Warning</p>
+        <ul class="activity-list warning-list">
+          <li v-for="item in analyticsWarnings" :key="item.courseId">
+            {{ item.title }} · {{ item.progress }}% · {{ item.reason }}
+          </li>
+        </ul>
+      </div>
     </article>
 
     <TemplateDashboardWidget class="full-width dashboard-template-widget" />
@@ -77,6 +86,10 @@
           <p class="muted">Growth</p>
           <p class="stat-big">+{{ weeklyGain }}%</p>
         </div>
+        <div>
+          <p class="muted">Study Time</p>
+          <p class="stat-big">{{ weeklyStudyMinutes }}m</p>
+        </div>
       </div>
     </article>
 
@@ -104,6 +117,9 @@
           <div class="strip-color" :style="{ background: course.gradient }"></div>
           <h4>{{ course.title }}</h4>
           <p>{{ course.description }}</p>
+          <p v-if="course.blockedLessons" class="strip-lock-indicator">
+            {{ course.blockedLessons }} locked · {{ course.nextLockedLessonTitle || 'lihat detail' }}
+          </p>
           <strong>{{ course.progress }}%</strong>
         </RouterLink>
       </div>
@@ -121,13 +137,17 @@ import TemplateDashboardWidget from '../components/template/TemplateDashboardWid
 import TemplateHeroArt from '../components/template/TemplateHeroArt.vue'
 import { useTemplateSwitcher } from '../plugins/templateSwitcher'
 import { useCoursePlayerStore } from '../stores/coursePlayer'
+import { useLearningAnalyticsStore } from '../stores/learningAnalytics'
 
 const { currentTemplate } = useTemplateSwitcher()
 const coursePlayerStore = useCoursePlayerStore()
-const { courses } = storeToRefs(coursePlayerStore)
+const analyticsStore = useLearningAnalyticsStore()
+const { courses, continueLearning } = storeToRefs(coursePlayerStore)
+const { data: analyticsData } = storeToRefs(analyticsStore)
 
 const weeklyProgress = ref(0)
 const weeklyGain = ref(0)
+const weeklyStudyMinutes = ref(0)
 const animatedCourseProgress = ref([])
 const frameIds = new Set()
 const timeoutIds = []
@@ -140,6 +160,10 @@ const displayCourses = computed(() =>
 )
 
 const heroCourse = computed(() => {
+  if (continueLearning.value?.id) {
+    const animated = displayCourses.value.find((course) => course.id === continueLearning.value.id)
+    return animated || continueLearning.value
+  }
   if (displayCourses.value.length) return displayCourses.value[0]
   return {
     id: 'ui-101',
@@ -150,6 +174,18 @@ const heroCourse = computed(() => {
     totalLessons: 4,
   }
 })
+
+const analyticsWarnings = computed(() => (analyticsData.value?.earlyWarnings || []).slice(0, 3))
+
+const calculateGrowthPercent = () => {
+  const byDay = analyticsData.value?.weeklyStudy?.byDay || []
+  if (!byDay.length) return 0
+  const splitIndex = Math.floor(byDay.length / 2)
+  const prev = byDay.slice(0, splitIndex).reduce((sum, row) => sum + Number(row.minutes || 0), 0)
+  const recent = byDay.slice(splitIndex).reduce((sum, row) => sum + Number(row.minutes || 0), 0)
+  if (prev <= 0) return recent > 0 ? 100 : 0
+  return Math.max(0, Math.round(((recent - prev) / prev) * 100))
+}
 
 const toCourseRoute = (course) => ({
   name: 'course-detail',
@@ -191,13 +227,22 @@ const animateCourses = () => {
 
 onMounted(async () => {
   await coursePlayerStore.loadCourses()
+  try {
+    await analyticsStore.load()
+  } catch {
+    // keep dashboard usable when analytics endpoint is unavailable
+  }
 
-  runNumberAnimation(0, 74, 1100, (value) => {
+  runNumberAnimation(0, Number(analyticsData.value?.completionRateAvg || 0), 1100, (value) => {
     weeklyProgress.value = value
   })
 
-  runNumberAnimation(0, 12, 900, (value) => {
+  runNumberAnimation(0, calculateGrowthPercent(), 900, (value) => {
     weeklyGain.value = value
+  })
+
+  runNumberAnimation(0, Number(analyticsData.value?.weeklyStudy?.totalMinutes || 0), 900, (value) => {
+    weeklyStudyMinutes.value = value
   })
 
   animateCourses()
@@ -209,6 +254,21 @@ watch(
     timeoutIds.forEach((id) => clearTimeout(id))
     timeoutIds.length = 0
     animateCourses()
+  },
+)
+
+watch(
+  () => analyticsData.value?.generatedAt,
+  () => {
+    runNumberAnimation(weeklyProgress.value, Number(analyticsData.value?.completionRateAvg || 0), 600, (value) => {
+      weeklyProgress.value = value
+    })
+    runNumberAnimation(weeklyGain.value, calculateGrowthPercent(), 600, (value) => {
+      weeklyGain.value = value
+    })
+    runNumberAnimation(weeklyStudyMinutes.value, Number(analyticsData.value?.weeklyStudy?.totalMinutes || 0), 600, (value) => {
+      weeklyStudyMinutes.value = value
+    })
   },
 )
 

@@ -97,17 +97,44 @@
         <div class="quiz-editor-stepper">
           <button class="ghost-btn" :class="{ active: activeStep === 'basic' }" type="button" @click="scrollToEditorSection('basic')">
             Basic Info
-            <span class="step-badge" :class="{ error: stepIssues.basic > 0 }">{{ stepIssues.basic > 0 ? `${stepIssues.basic} err` : 'ok' }}</span>
+            <button
+              class="step-badge"
+              :class="{ error: stepIssues.basic > 0 }"
+              type="button"
+              @click.stop="toggleStepDetail('basic')"
+            >
+              {{ stepIssues.basic > 0 ? `${stepIssues.basic} err` : 'ok' }}
+            </button>
           </button>
           <button class="ghost-btn" :class="{ active: activeStep === 'scoring' }" type="button" @click="scrollToEditorSection('scoring')">
             Scoring
-            <span class="step-badge" :class="{ error: stepIssues.scoring > 0 }">{{ stepIssues.scoring > 0 ? `${stepIssues.scoring} err` : 'ok' }}</span>
+            <button
+              class="step-badge"
+              :class="{ error: stepIssues.scoring > 0 }"
+              type="button"
+              @click.stop="toggleStepDetail('scoring')"
+            >
+              {{ stepIssues.scoring > 0 ? `${stepIssues.scoring} err` : 'ok' }}
+            </button>
           </button>
           <button class="ghost-btn" :class="{ active: activeStep === 'questions' }" type="button" @click="scrollToEditorSection('questions')">
             Questions
-            <span class="step-badge" :class="{ error: stepIssues.questions > 0 }">{{ stepIssues.questions > 0 ? `${stepIssues.questions} err` : 'ok' }}</span>
+            <button
+              class="step-badge"
+              :class="{ error: stepIssues.questions > 0 }"
+              type="button"
+              @click.stop="toggleStepDetail('questions')"
+            >
+              {{ stepIssues.questions > 0 ? `${stepIssues.questions} err` : 'ok' }}
+            </button>
           </button>
         </div>
+        <article v-if="stepDetailOpen && stepDetailMessages.length" class="step-detail-popover">
+          <p class="step-detail-title">{{ stepDetailTitle }}</p>
+          <ul>
+            <li v-for="message in stepDetailMessages" :key="message">{{ message }}</li>
+          </ul>
+        </article>
 
         <article v-if="hasValidationError" class="quiz-admin-validation">
           <strong>Form belum valid</strong>
@@ -295,6 +322,7 @@ const basicSectionRef = ref(null)
 const scoringSectionRef = ref(null)
 const questionsSectionRef = ref(null)
 const activeStep = ref('basic')
+const stepDetailOpen = ref('')
 
 const filteredQuizzes = computed(() =>
   [...quizzes.value]
@@ -366,6 +394,36 @@ const stepIssues = computed(() => {
     scoring,
     questions: questionErrors + questions,
   }
+})
+const stepMessages = computed(() => ({
+  basic: [
+    !String(editor.value.courseId || '').trim() ? 'Course wajib dipilih.' : '',
+    !String(editor.value.moduleId || '').trim() ? 'Module wajib dipilih.' : '',
+    !String(editor.value.title || '').trim() ? 'Title wajib diisi.' : '',
+    !String(editor.value.description || '').trim() ? 'Description wajib diisi.' : '',
+  ].filter(Boolean),
+  scoring: [
+    !Number.isFinite(Number(editor.value.passingScore)) || Number(editor.value.passingScore) < 0 || Number(editor.value.passingScore) > 100
+      ? 'Passing score harus 0-100.'
+      : '',
+    !Number.isFinite(Number(editor.value.maxAttempts)) || Number(editor.value.maxAttempts) < 1 || Number(editor.value.maxAttempts) > 20
+      ? 'Max attempts harus 1-20.'
+      : '',
+    !Number.isFinite(Number(editor.value.timeLimitSec)) || Number(editor.value.timeLimitSec) < 60
+      ? 'Time limit minimal 60 detik.'
+      : '',
+  ].filter(Boolean),
+  questions: [
+    !editor.value.questions.length ? 'Minimal harus ada 1 question.' : '',
+    ...Object.values(questionErrorMap.value).filter(Boolean),
+  ].filter(Boolean),
+}))
+const stepDetailMessages = computed(() => stepMessages.value[stepDetailOpen.value] || [])
+const stepDetailTitle = computed(() => {
+  if (stepDetailOpen.value === 'basic') return 'Basic Info Checklist'
+  if (stepDetailOpen.value === 'scoring') return 'Scoring Checklist'
+  if (stepDetailOpen.value === 'questions') return 'Questions Checklist'
+  return ''
 })
 const validationMessages = computed(() => {
   const messages = []
@@ -584,6 +642,10 @@ const scrollToEditorSection = (section) => {
   target.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
+const toggleStepDetail = (section) => {
+  stepDetailOpen.value = stepDetailOpen.value === section ? '' : section
+}
+
 const updateActiveStep = () => {
   if (mode.value !== 'edit') return
   const panel = editorPanelRef.value
@@ -653,7 +715,10 @@ watch(filteredQuizzes, (items) => {
 watch(
   () => mode.value,
   async (nextMode) => {
-    if (nextMode !== 'edit') return
+    if (nextMode !== 'edit') {
+      stepDetailOpen.value = ''
+      return
+    }
     await nextTick()
     updateActiveStep()
   },

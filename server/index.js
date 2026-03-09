@@ -1,17 +1,21 @@
 import bcrypt from 'bcryptjs'
 import cors from 'cors'
 import express from 'express'
+import { S3Client, DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3'
+import { getSignedUrl as getSignedS3Url } from '@aws-sdk/s3-request-presigner'
 import rateLimit from 'express-rate-limit'
 import helmet from 'helmet'
 import jwt from 'jsonwebtoken'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { TextDecoder } from 'node:util'
 import { z } from 'zod'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const DB_DIR = path.join(__dirname, 'data')
+const UPLOAD_DIR = path.join(DB_DIR, 'uploads')
 const isTestEnv = process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST)
 const defaultDbName = isTestEnv ? `db.test.${process.pid}.json` : 'db.json'
 const DB_PATH = process.env.DB_PATH || path.join(DB_DIR, defaultDbName)
@@ -21,6 +25,14 @@ const JWT_SECRET = process.env.JWT_SECRET || 'curiosity-dev-secret'
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '12h'
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '*'
 const BCRYPT_ROUNDS = Number(process.env.BCRYPT_ROUNDS || 10)
+const STORAGE_PROVIDER = process.env.STORAGE_PROVIDER || 'local'
+const S3_REGION = process.env.S3_REGION || 'us-east-1'
+const S3_BUCKET = process.env.S3_BUCKET || ''
+const S3_ENDPOINT = process.env.S3_ENDPOINT || ''
+const S3_ACCESS_KEY_ID = process.env.S3_ACCESS_KEY_ID || ''
+const S3_SECRET_ACCESS_KEY = process.env.S3_SECRET_ACCESS_KEY || ''
+const S3_FORCE_PATH_STYLE = String(process.env.S3_FORCE_PATH_STYLE || 'false') === 'true'
+const S3_SIGNED_URL_EXPIRES_SEC = Number(process.env.S3_SIGNED_URL_EXPIRES_SEC || 900)
 
 const allowedOrigins = CORS_ORIGIN === '*' ? '*' : CORS_ORIGIN.split(',').map((v) => v.trim()).filter(Boolean)
 
@@ -32,6 +44,11 @@ const accessLevels = {
 
 const roles = ['admin', 'instructor', 'student']
 const statuses = ['active', 'suspended', 'pending']
+const MAX_ASSIGNMENT_UPLOAD_BYTES = 2 * 1024 * 1024
+const MAX_ASSIGNMENT_UPLOAD_TOTAL_BYTES = Number(process.env.MAX_ASSIGNMENT_UPLOAD_TOTAL_BYTES || 20 * 1024 * 1024)
+const VIDEO_COMPLETION_THRESHOLD_PERCENT = 90
+const MAX_WATCH_STEP_SEC = 20
+const ANALYTICS_WINDOW_DAYS = 7
 
 const defaultUsers = [
   {
@@ -95,6 +112,100 @@ const defaultPermissionMatrix = {
   },
 }
 
+const demoVideoUrl = 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4'
+
+const toDataUrlFromText = (text, mimeType = 'text/plain') =>
+  `data:${mimeType};base64,${Buffer.from(String(text || ''), 'utf8').toString('base64')}`
+
+const toLessonResourceList = (courseId, lessonId, resources = []) =>
+  resources
+    .map((resource, index) => {
+      if (typeof resource === 'string') {
+        return {
+          id: `${lessonId}-res-${index + 1}`,
+          title: resource,
+          fileName: String(resource).toLowerCase().replace(/[^a-z0-9._-]+/g, '-'),
+          mimeType: 'text/plain',
+          sizeBytes: Buffer.byteLength(resource, 'utf8'),
+          dataUrl: toDataUrlFromText(`Lesson resource: ${resource}\nCourse: ${courseId}\nLesson: ${lessonId}\n`, 'text/plain'),
+        }
+      }
+      if (!resource || typeof resource !== 'object') return null
+      if (resource.dataUrl) {
+        return {
+          id: String(resource.id || `${lessonId}-res-${index + 1}`),
+          title: String(resource.title || resource.fileName || `Resource ${index + 1}`),
+          fileName: String(resource.fileName || `${lessonId}-resource-${index + 1}.txt`),
+          mimeType: String(resource.mimeType || 'text/plain'),
+          sizeBytes: Number(resource.sizeBytes || 0),
+          dataUrl: String(resource.dataUrl),
+        }
+      }
+      const content = String(resource.content || resource.text || '')
+      return {
+        id: String(resource.id || `${lessonId}-res-${index + 1}`),
+        title: String(resource.title || resource.fileName || `Resource ${index + 1}`),
+        fileName: String(resource.fileName || `${lessonId}-resource-${index + 1}.txt`),
+        mimeType: String(resource.mimeType || 'text/plain'),
+        sizeBytes: Number(resource.sizeBytes || Buffer.byteLength(content, 'utf8')),
+        dataUrl: toDataUrlFromText(content || `Resource ${index + 1}`, String(resource.mimeType || 'text/plain')),
+      }
+    })
+    .filter(Boolean)
+
+const getLessonCompletionGate = (lesson, playback = {}) => {
+  if (lesson.type !== 'video') {
+    return {
+      canComplete: true,
+      requiredProgressPercent: 0,
+      reason: '',
+    }
+  }
+  const progressPercent = Math.max(0, Math.min(100, Math.round(Number(playback.progressPercent || 0))))
+  const canComplete = progressPercent >= VIDEO_COMPLETION_THRESHOLD_PERCENT || Boolean(playback.completedVideoAt)
+  return {
+    canComplete,
+    requiredProgressPercent: VIDEO_COMPLETION_THRESHOLD_PERCENT,
+    reason: canComplete ? '' : `Watch at least ${VIDEO_COMPLETION_THRESHOLD_PERCENT}% of the video before completing.`,
+  }
+}
+
+const normalizeRanges = (ranges = [], durationSec = 0) => {
+  const max = Math.max(0, Math.floor(Number(durationSec || 0)))
+  const normalized = (Array.isArray(ranges) ? ranges : [])
+    .map((row) => {
+      const start = Math.max(0, Math.floor(Number(row?.start ?? row?.from ?? 0)))
+      const end = Math.max(0, Math.floor(Number(row?.end ?? row?.to ?? 0)))
+      const safeEnd = max > 0 ? Math.min(end, max) : end
+      const safeStart = max > 0 ? Math.min(start, max) : start
+      if (safeEnd <= safeStart) return null
+      return { start: safeStart, end: safeEnd }
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.start - b.start)
+
+  const merged = []
+  normalized.forEach((range) => {
+    const last = merged[merged.length - 1]
+    if (!last || range.start > last.end) {
+      merged.push({ ...range })
+      return
+    }
+    last.end = Math.max(last.end, range.end)
+  })
+  return merged
+}
+
+const sumRangeDuration = (ranges = []) =>
+  normalizeRanges(ranges).reduce((sum, row) => sum + Math.max(0, row.end - row.start), 0)
+
+const appendWatchedRange = (ranges = [], fromSec, toSec, durationSec) => {
+  const start = Math.max(0, Math.floor(Number(fromSec || 0)))
+  const end = Math.max(0, Math.floor(Number(toSec || 0)))
+  if (end <= start) return normalizeRanges(ranges, durationSec)
+  return normalizeRanges([...(Array.isArray(ranges) ? ranges : []), { start, end }], durationSec)
+}
+
 const defaultCourseCatalog = [
   {
     id: 'ui-101',
@@ -114,6 +225,12 @@ const defaultCourseCatalog = [
             duration: '12m',
             type: 'video',
             summary: 'Memahami prinsip hierarchy untuk layout yang mudah dipahami.',
+            transcript: [
+              { atSec: 8, text: 'Visual hierarchy membantu user menangkap informasi paling penting lebih dulu.' },
+              { atSec: 36, text: 'Gunakan skala ukuran, kontras, dan posisi untuk memandu scanning pattern.' },
+              { atSec: 74, text: 'Judul, subjudul, dan CTA harus punya prioritas visual yang jelas.' },
+              { atSec: 108, text: 'Hierarchy yang baik menurunkan cognitive load di halaman dashboard.' },
+            ],
             resources: ['Hierarchy Checklist.pdf', 'Reference Board.fig'],
           },
           {
@@ -122,6 +239,12 @@ const defaultCourseCatalog = [
             duration: '16m',
             type: 'video',
             summary: 'Kombinasi font headline-body untuk readability.',
+            transcript: [
+              { atSec: 12, text: 'Mulai dari satu font netral untuk body text yang mudah dibaca.' },
+              { atSec: 48, text: 'Pasangkan display font seperlunya untuk heading, bukan untuk paragraf panjang.' },
+              { atSec: 86, text: 'Pastikan rasio ukuran heading ke body konsisten di semua halaman.' },
+              { atSec: 124, text: 'Gunakan line-height 1.4 sampai 1.6 untuk meningkatkan readability.' },
+            ],
             resources: ['Type Scale Guide.pdf'],
           },
           {
@@ -130,6 +253,12 @@ const defaultCourseCatalog = [
             duration: '14m',
             type: 'video',
             summary: 'Praktik kontras warna agar aksesibel dan konsisten brand.',
+            transcript: [
+              { atSec: 10, text: 'Kontras bukan hanya soal estetika, tapi juga aksesibilitas.' },
+              { atSec: 42, text: 'Untuk teks normal, targetkan rasio minimal 4.5 banding 1.' },
+              { atSec: 79, text: 'State hover dan disabled juga perlu kontras yang tetap terbaca.' },
+              { atSec: 112, text: 'Uji kombinasi warna pada latar terang dan gelap sebelum publish.' },
+            ],
             resources: ['WCAG Contrast Card.pdf'],
           },
           {
@@ -162,6 +291,12 @@ const defaultCourseCatalog = [
             duration: '10m',
             type: 'video',
             summary: 'Struktur HTML yang benar untuk SEO dan aksesibilitas.',
+            transcript: [
+              { atSec: 9, text: 'Tag semantik membantu browser dan screen reader memahami struktur konten.' },
+              { atSec: 34, text: 'Gunakan main hanya sekali, lalu susun section dan article sesuai konteks.' },
+              { atSec: 61, text: 'Label pada input form wajib terhubung agar aksesibel.' },
+              { atSec: 92, text: 'Semantic HTML mempermudah maintenance dan testing komponen.' },
+            ],
             resources: ['Semantic Tag Cheat Sheet.pdf'],
           },
           {
@@ -170,6 +305,12 @@ const defaultCourseCatalog = [
             duration: '20m',
             type: 'video',
             summary: 'Membangun layout adaptif untuk desktop dan mobile.',
+            transcript: [
+              { atSec: 15, text: 'Mulai dari grid 12 kolom agar fleksibel untuk banyak skenario layout.' },
+              { atSec: 58, text: 'Gunakan minmax dan auto-fit untuk komponen card yang responsif.' },
+              { atSec: 104, text: 'Breakpoint harus mengikuti konten, bukan sekadar ukuran device populer.' },
+              { atSec: 151, text: 'Gabungkan grid dan container query untuk komponen modular.' },
+            ],
             resources: ['Grid Playground.zip'],
           },
         ],
@@ -194,6 +335,12 @@ const defaultCourseCatalog = [
             duration: '11m',
             type: 'video',
             summary: 'Teknik menyusun problem statement berbasis user impact.',
+            transcript: [
+              { atSec: 11, text: 'Problem framing dimulai dari user pain yang nyata dan terukur.' },
+              { atSec: 41, text: 'Pisahkan gejala dari akar masalah sebelum menentukan solusi.' },
+              { atSec: 73, text: 'Tulis problem statement dengan format siapa, hambatan, dan dampaknya.' },
+              { atSec: 98, text: 'Validasi framing lewat data perilaku user dan feedback lapangan.' },
+            ],
             resources: ['Problem Framing Canvas.pdf'],
           },
           {
@@ -461,6 +608,89 @@ const discussionUpdateSchema = z
   })
   .strict()
 
+const assignmentSubmissionSchema = z
+  .object({
+    linkUrl: z.string().url().max(500).optional().or(z.literal('')),
+    notes: z.string().max(4000).optional(),
+    attachmentName: z.string().max(180).optional().or(z.literal('')),
+    attachmentDataUrl: z.string().max(2_200_000).optional().or(z.literal('')),
+    attachmentId: z.string().min(1).max(80).optional().or(z.literal('')),
+  })
+  .strict()
+
+const assignmentReviewSchema = z
+  .object({
+    status: z.enum(['revised', 'graded']),
+    feedback: z.string().max(4000).optional(),
+    rubricScores: z
+      .array(
+        z
+          .object({
+            criterionId: z.string().min(1).max(80),
+            score: z.number().min(0).max(100),
+            comment: z.string().max(400).optional(),
+          })
+          .strict(),
+      )
+      .max(30)
+      .optional(),
+  })
+  .strict()
+
+const assignmentConfigSchema = z
+  .object({
+    dueAt: z.string().datetime().nullable().optional(),
+    graceMinutes: z.number().int().min(0).max(60 * 24 * 14).optional(),
+  })
+  .strict()
+
+const lessonPlaybackSchema = z
+  .object({
+    positionSec: z.number().min(0).max(24 * 60 * 60),
+    durationSec: z.number().min(0).max(24 * 60 * 60).optional(),
+    markCompleted: z.boolean().optional(),
+  })
+  .strict()
+
+const lessonNoteCreateSchema = z
+  .object({
+    timestampSec: z.number().min(0).max(24 * 60 * 60),
+    note: z.string().min(1).max(400),
+  })
+  .strict()
+
+const lessonNoteUpdateSchema = z
+  .object({
+    note: z.string().min(1).max(400),
+  })
+  .strict()
+
+const modulePrerequisiteSchema = z
+  .object({
+    mode: z.enum(['all', 'any']).optional(),
+    rules: z
+      .array(
+        z
+          .object({
+            type: z.enum(['module-complete', 'module-quiz-pass', 'lesson-complete']),
+            moduleId: z.string().min(1).max(80).optional(),
+            lessonId: z.string().min(1).max(80).optional(),
+          })
+          .strict(),
+      )
+      .max(12)
+      .optional(),
+  })
+  .strict()
+
+const uploadCreateSchema = z
+  .object({
+    fileName: z.string().min(1).max(180),
+    dataUrl: z.string().min(30).max(2_900_000),
+    purpose: z.enum(['assignment']).optional(),
+  })
+  .strict()
+
 const quizSessionStartSchema = z
   .object({
     retake: z.boolean().optional(),
@@ -582,7 +812,11 @@ const createDefaultDb = () => {
     quizzes: deepClone(defaultQuizCatalog),
     quizAttempts: {},
     quizSessions: {},
+    uploads: {},
+    nextUploadSeq: 1,
+    assignmentSubmissions: {},
     courseProgress: {},
+    lessonNotes: {},
     discussions: {},
     profiles,
     revokedTokens: [],
@@ -614,7 +848,11 @@ const hydrateDb = (db) => {
   }))
   next.quizAttempts = next.quizAttempts || {}
   next.quizSessions = next.quizSessions || {}
+  next.uploads = next.uploads || {}
+  next.nextUploadSeq = Number.isFinite(next.nextUploadSeq) ? Number(next.nextUploadSeq) : 1
+  next.assignmentSubmissions = next.assignmentSubmissions || {}
   next.courseProgress = next.courseProgress || {}
+  next.lessonNotes = next.lessonNotes || {}
   next.discussions = next.discussions || {}
   next.profiles = next.profiles || {}
   next.revokedTokens = Array.isArray(next.revokedTokens) ? next.revokedTokens : []
@@ -635,6 +873,7 @@ const hydrateDb = (db) => {
 
 const ensureDb = async () => {
   await mkdir(DB_DIR, { recursive: true })
+  await storageAdapter.ensure()
   try {
     const raw = await readFile(DB_PATH, 'utf-8')
     const parsed = hydrateDb(JSON.parse(raw))
@@ -698,6 +937,8 @@ const flattenLessons = (course) =>
 const getQuizById = (db, quizId) => (db.quizzes || []).find((item) => item.id === quizId) || null
 const canManageQuizRole = (db, user) =>
   user?.role === 'admin' || Boolean(db?.permissionMatrix?.[user?.role || '']?.manageQuiz)
+const canReviewAssignmentRole = (db, user) =>
+  user?.role === 'admin' || Boolean(db?.permissionMatrix?.[user?.role || '']?.manageCourse)
 const isQuizPublished = (quiz) => String(quiz?.status || 'published') === 'published'
 
 const buildQuizMeta = (quiz) => ({
@@ -716,6 +957,91 @@ const buildQuizMeta = (quiz) => ({
 const getQuizHistory = (db, userId, quizId) => {
   const scopedByUser = db.quizAttempts?.[userId] || {}
   return Array.isArray(scopedByUser[quizId]) ? scopedByUser[quizId] : []
+}
+
+const getModuleQuizForCourseModule = (db, courseId, moduleId) => {
+  const quizzes = Array.isArray(db?.quizzes) ? db.quizzes : []
+  const published = quizzes.filter((quiz) => quiz.courseId === courseId && quiz.moduleId === moduleId && isQuizPublished(quiz))
+  if (!published.length) return null
+  const exact = published.find((quiz) => quiz.id === moduleId)
+  return exact || published[0]
+}
+
+const getModuleQuizGateByModuleId = (db, userId, course) =>
+  Object.fromEntries(
+    (course.modules || []).map((module) => {
+      const quiz = getModuleQuizForCourseModule(db, course.id, module.id)
+      if (!quiz) {
+        return [
+          module.id,
+          {
+            required: false,
+            passed: true,
+            quizId: '',
+            quizTitle: '',
+          },
+        ]
+      }
+      const history = getQuizHistory(db, userId, quiz.id)
+      const passed = history.some((attempt) => Boolean(attempt?.passed))
+      return [
+        module.id,
+        {
+          required: true,
+          passed,
+          quizId: quiz.id,
+          quizTitle: quiz.title || 'Module Quiz',
+        },
+      ]
+    }),
+  )
+
+const evaluatePrerequisiteRules = ({ mode = 'all', rules = [] }, context) => {
+  const normalizedRules = Array.isArray(rules) ? rules : []
+  if (!normalizedRules.length) {
+    return { blocked: false, reason: '' }
+  }
+  const results = normalizedRules.map((rule) => {
+    const type = String(rule?.type || '')
+    if (type === 'module-complete') {
+      const module = context.moduleById[rule.moduleId]
+      const passed = Boolean(module) && module.lessons.every((lesson) => context.completedSet.has(lesson.id))
+      return {
+        passed,
+        reason: `Complete module ${module?.title || rule.moduleId} first.`,
+      }
+    }
+    if (type === 'module-quiz-pass') {
+      const gate = context.moduleQuizGateByModuleId[rule.moduleId]
+      const passed = !gate?.required || Boolean(gate?.passed)
+      return {
+        passed,
+        reason: `Pass ${gate?.quizTitle || 'module quiz'} first.`,
+      }
+    }
+    if (type === 'lesson-complete') {
+      const passed = context.completedSet.has(rule.lessonId)
+      return {
+        passed,
+        reason: `Complete lesson ${rule.lessonId} first.`,
+      }
+    }
+    return { passed: true, reason: '' }
+  })
+
+  if (String(mode || 'all') === 'any') {
+    const anyPassed = results.some((row) => row.passed)
+    return {
+      blocked: !anyPassed,
+      reason: anyPassed ? '' : results.map((row) => row.reason).find(Boolean) || 'Prerequisite is not satisfied.',
+    }
+  }
+
+  const unmet = results.find((row) => !row.passed)
+  return {
+    blocked: Boolean(unmet),
+    reason: unmet?.reason || '',
+  }
 }
 
 const setQuizHistory = (db, userId, quizId, history) => {
@@ -808,6 +1134,9 @@ const ensureCourseState = (db, userId, course) => {
   const state = {
     completedLessonIds: Array.isArray(courseState.completedLessonIds) ? courseState.completedLessonIds : [],
     activeLessonId: courseState.activeLessonId || firstLessonId,
+    lessonPlayback: courseState.lessonPlayback && typeof courseState.lessonPlayback === 'object' ? courseState.lessonPlayback : {},
+    studyEvents: Array.isArray(courseState.studyEvents) ? courseState.studyEvents : [],
+    lastTouchedAt: courseState.lastTouchedAt || null,
   }
   db.courseProgress[userId] = {
     ...userScope,
@@ -816,16 +1145,96 @@ const ensureCourseState = (db, userId, course) => {
   return state
 }
 
-const buildCourseView = (course, state) => {
+const lessonNoteScope = (courseId, lessonId) => `${courseId}:${lessonId}`
+
+const listLessonNotes = (db, userId, courseId, lessonId) => {
+  const all = db.lessonNotes?.[userId] || {}
+  const scoped = all[lessonNoteScope(courseId, lessonId)]
+  if (!Array.isArray(scoped)) return []
+  return scoped
+    .map((item) => ({
+      id: item.id,
+      timestampSec: Math.max(0, Math.floor(Number(item.timestampSec || 0))),
+      note: String(item.note || ''),
+      createdAt: item.createdAt || null,
+      updatedAt: item.updatedAt || item.createdAt || null,
+    }))
+    .sort((a, b) => a.timestampSec - b.timestampSec)
+}
+
+const writeLessonNotes = (db, userId, courseId, lessonId, notes) => {
+  db.lessonNotes = db.lessonNotes || {}
+  const scopedByUser = db.lessonNotes[userId] || {}
+  db.lessonNotes[userId] = {
+    ...scopedByUser,
+    [lessonNoteScope(courseId, lessonId)]: Array.isArray(notes) ? notes : [],
+  }
+}
+
+const buildContinueLearning = (db, userId) => {
+  const courses = db.courses || []
+  const cards = courses.map((course) => {
+    const state = ensureCourseState(db, userId, course)
+    const moduleQuizGateByModuleId = getModuleQuizGateByModuleId(db, userId, course)
+    const view = buildCourseView(course, state, { moduleQuizGateByModuleId })
+    return toCourseCard(view)
+  })
+  if (!cards.length) return null
+
+  const sorted = cards
+    .slice()
+    .sort((a, b) => Date.parse(b.lastTouchedAt || 0) - Date.parse(a.lastTouchedAt || 0))
+  const mostRecent = sorted[0]
+  if (mostRecent?.lastTouchedAt) return mostRecent
+  return cards.find((item) => Number(item.progress || 0) < 100) || cards[0]
+}
+
+const buildCourseView = (course, state, options = {}) => {
+  const moduleQuizGateByModuleId = options.moduleQuizGateByModuleId || {}
   const allLessons = flattenLessons(course)
   const lessonIds = allLessons.map((lesson) => lesson.id)
   const completedSet = new Set(state.completedLessonIds)
+  const moduleById = Object.fromEntries((course.modules || []).map((module) => [module.id, module]))
+  const firstLessonIdByModule = Object.fromEntries(
+    (course.modules || []).map((module) => [module.id, module.lessons?.[0]?.id || '']),
+  )
+  const isModuleCompleted = (module) =>
+    (module?.lessons || []).every((lesson) => completedSet.has(lesson.id))
 
   const lessonMetaById = Object.fromEntries(
     lessonIds.map((lessonId, index) => {
       const prevLessonId = lessonIds[index - 1]
-      const isLocked = index > 0 && !completedSet.has(prevLessonId)
-      return [lessonId, { index, isLocked }]
+      let isLocked = index > 0 && !completedSet.has(prevLessonId)
+      let lockReason = isLocked ? 'Complete previous lesson first.' : ''
+
+      if (!isLocked) {
+        const currentModuleIndex = (course.modules || []).findIndex((module) => (module.lessons || []).some((lesson) => lesson.id === lessonId))
+        if (currentModuleIndex > 0) {
+          const currentModule = course.modules[currentModuleIndex]
+          const prevModule = course.modules[currentModuleIndex - 1]
+          const isFirstLessonInModule = firstLessonIdByModule[currentModule.id] === lessonId
+          if (isFirstLessonInModule) {
+            const prerequisite = currentModule?.prerequisite || {
+              mode: 'all',
+              rules: [
+                { type: 'module-complete', moduleId: prevModule?.id },
+                ...(moduleQuizGateByModuleId[prevModule?.id]?.required ? [{ type: 'module-quiz-pass', moduleId: prevModule?.id }] : []),
+              ].filter((row) => row.moduleId),
+            }
+            const evalResult = evaluatePrerequisiteRules(prerequisite, {
+              moduleById,
+              completedSet,
+              moduleQuizGateByModuleId,
+            })
+            if (evalResult.blocked) {
+              isLocked = true
+              lockReason = evalResult.reason || 'Prerequisite is not satisfied.'
+            }
+          }
+        }
+      }
+
+      return [lessonId, { index, isLocked, lockReason }]
     }),
   )
 
@@ -835,22 +1244,60 @@ const buildCourseView = (course, state) => {
     ...module,
     lessons: module.lessons.map((lesson) => {
       const meta = lessonMetaById[lesson.id]
+      const playback = {
+        positionSec: Math.max(0, Math.floor(Number(state.lessonPlayback?.[lesson.id]?.positionSec || 0))),
+        durationSec: Math.max(0, Math.floor(Number(state.lessonPlayback?.[lesson.id]?.durationSec || 0))),
+        watchedRanges: normalizeRanges(state.lessonPlayback?.[lesson.id]?.watchedRanges || [], state.lessonPlayback?.[lesson.id]?.durationSec || 0),
+        watchedSec: Math.max(
+          0,
+          Math.floor(
+            Number(
+              state.lessonPlayback?.[lesson.id]?.watchedSec ||
+                sumRangeDuration(state.lessonPlayback?.[lesson.id]?.watchedRanges || []),
+            ),
+          ),
+        ),
+        progressPercent: Math.max(0, Math.min(100, Math.round(Number(state.lessonPlayback?.[lesson.id]?.progressPercent || 0)))),
+        completedVideoAt: state.lessonPlayback?.[lesson.id]?.completedVideoAt || null,
+      }
+      const completionGate = getLessonCompletionGate(lesson, playback)
       return {
         ...lesson,
+        videoUrl: String(lesson.videoUrl || (lesson.type === 'video' ? demoVideoUrl : '')),
+        resources: toLessonResourceList(course.id, lesson.id, lesson.resources || []),
+        transcript: (
+          Array.isArray(lesson.transcript) && lesson.transcript.length
+            ? lesson.transcript
+            : lesson.summary
+              ? [{ atSec: 0, text: lesson.summary }]
+              : []
+        )
+          .map((row, index) => ({
+            id: `${lesson.id}-tr-${index + 1}`,
+            atSec: Math.max(0, Math.floor(Number(row?.atSec ?? 0))),
+            text: String(row?.text || ''),
+          }))
+          .filter((row) => row.text),
         isCompleted: completedSet.has(lesson.id),
         isLocked: Boolean(meta?.isLocked),
+        lockReason: meta?.lockReason || '',
         isActive: lesson.id === activeLessonId,
+        playback,
+        canComplete: completionGate.canComplete,
+        completionRequiredPercent: completionGate.requiredProgressPercent,
+        completionGateReason: completionGate.reason,
       }
     }),
   }))
 
-  const completedLessons = allLessons.filter((lesson) => completedSet.has(lesson.id)).length
+  const lessonViews = modules.flatMap((module) => module.lessons)
+  const completedLessons = lessonViews.filter((lesson) => lesson.isCompleted).length
   const totalLessons = allLessons.length
   const progress = totalLessons ? Math.round((completedLessons / totalLessons) * 100) : 0
-  const activeLesson = allLessons.find((lesson) => lesson.id === activeLessonId) || allLessons[0] || null
-  const activeIndex = activeLesson ? lessonIds.indexOf(activeLesson.id) : -1
-  const previousLesson = activeIndex > 0 ? allLessons[activeIndex - 1] : null
-  const nextLesson = activeIndex >= 0 && activeIndex < allLessons.length - 1 ? allLessons[activeIndex + 1] : null
+  const activeLesson = lessonViews.find((lesson) => lesson.id === activeLessonId) || lessonViews[0] || null
+  const activeIndex = activeLesson ? lessonViews.findIndex((lesson) => lesson.id === activeLesson.id) : -1
+  const previousLesson = activeIndex > 0 ? lessonViews[activeIndex - 1] : null
+  const nextLesson = activeIndex >= 0 && activeIndex < lessonViews.length - 1 ? lessonViews[activeIndex + 1] : null
 
   return {
     id: course.id,
@@ -866,6 +1313,7 @@ const buildCourseView = (course, state) => {
     progress,
     completedLessons,
     totalLessons,
+    lastTouchedAt: state.lastTouchedAt || null,
   }
 }
 
@@ -880,7 +1328,90 @@ const toCourseCard = (courseView) => ({
   activeLessonTitle: courseView.activeLesson?.title || '',
   totalLessons: courseView.totalLessons,
   completedLessons: courseView.completedLessons,
+  blockedLessons: (courseView.modules || []).flatMap((module) => module.lessons || []).filter((lesson) => lesson.isLocked).length,
+  nextLockedLessonTitle:
+    (courseView.modules || [])
+      .flatMap((module) => module.lessons || [])
+      .find((lesson) => lesson.isLocked)?.title || '',
+  nextLockReason:
+    (courseView.modules || [])
+      .flatMap((module) => module.lessons || [])
+      .find((lesson) => lesson.isLocked)?.lockReason || '',
+  lastTouchedAt: courseView.lastTouchedAt || null,
 })
+
+const buildLearningAnalytics = (db, userId) => {
+  const nowMs = Date.now()
+  const sinceMs = nowMs - ANALYTICS_WINDOW_DAYS * 24 * 60 * 60 * 1000
+  const dayBuckets = Array.from({ length: ANALYTICS_WINDOW_DAYS }).map((_, index) => {
+    const day = new Date(nowMs - (ANALYTICS_WINDOW_DAYS - 1 - index) * 24 * 60 * 60 * 1000)
+    return {
+      date: day.toISOString().slice(0, 10),
+      minutes: 0,
+    }
+  })
+  const bucketByDate = Object.fromEntries(dayBuckets.map((row) => [row.date, row]))
+
+  const courses = (db.courses || []).map((course) => {
+    const state = ensureCourseState(db, userId, course)
+    const moduleQuizGateByModuleId = getModuleQuizGateByModuleId(db, userId, course)
+    const view = buildCourseView(course, state, { moduleQuizGateByModuleId })
+    const studyEvents = Array.isArray(state.studyEvents) ? state.studyEvents : []
+    const weeklySeconds = studyEvents
+      .filter((event) => Date.parse(event.at || '') >= sinceMs)
+      .reduce((sum, event) => sum + Math.max(0, Number(event.seconds || 0)), 0)
+    studyEvents.forEach((event) => {
+      const eventMs = Date.parse(event.at || '')
+      if (!Number.isFinite(eventMs) || eventMs < sinceMs) return
+      const keyDate = new Date(eventMs).toISOString().slice(0, 10)
+      if (bucketByDate[keyDate]) {
+        bucketByDate[keyDate].minutes += Math.max(0, Number(event.seconds || 0)) / 60
+      }
+    })
+    const lastStudiedAt = studyEvents[0]?.at || null
+    const atRisk = view.progress < 40 && (!lastStudiedAt || nowMs - Date.parse(lastStudiedAt) > 3 * 24 * 60 * 60 * 1000)
+    return {
+      courseId: view.id,
+      title: view.title,
+      progress: view.progress,
+      completionRate: view.progress,
+      completedLessons: view.completedLessons,
+      totalLessons: view.totalLessons,
+      weeklyStudyMinutes: Math.round(weeklySeconds / 60),
+      lastStudiedAt,
+      atRisk,
+    }
+  })
+
+  const weeklyTotalMinutes = Math.round(dayBuckets.reduce((sum, row) => sum + row.minutes, 0))
+  const completionRateAvg = courses.length ? Math.round(courses.reduce((sum, row) => sum + row.completionRate, 0) / courses.length) : 0
+  const earlyWarnings = courses
+    .filter((row) => row.atRisk)
+    .map((row) => ({
+      courseId: row.courseId,
+      title: row.title,
+      progress: row.progress,
+      lastStudiedAt: row.lastStudiedAt,
+      reason: row.lastStudiedAt
+        ? 'Progress masih rendah dan aktivitas belajar menurun.'
+        : 'Belum ada aktivitas belajar untuk course ini.',
+    }))
+    .slice(0, 6)
+
+  return {
+    generatedAt: new Date().toISOString(),
+    completionRateAvg,
+    weeklyStudy: {
+      totalMinutes: weeklyTotalMinutes,
+      byDay: dayBuckets.map((row) => ({
+        date: row.date,
+        minutes: Math.round(row.minutes),
+      })),
+    },
+    courses,
+    earlyWarnings,
+  }
+}
 
 const findCourseAndLesson = (db, courseId, lessonId) => {
   const course = (db.courses || []).find((item) => item.id === courseId)
@@ -890,9 +1421,410 @@ const findCourseAndLesson = (db, courseId, lessonId) => {
   return { course, lesson }
 }
 
+const updateLessonAssignmentConfig = (db, courseId, lessonId, updater) => {
+  db.courses = (db.courses || []).map((course) => {
+    if (course.id !== courseId) return course
+    return {
+      ...course,
+      modules: course.modules.map((module) => ({
+        ...module,
+        lessons: module.lessons.map((lesson) => {
+          if (lesson.id !== lessonId) return lesson
+          const nextAssignment = updater(lesson.assignment || {})
+          return {
+            ...lesson,
+            assignment: nextAssignment,
+          }
+        }),
+      })),
+    }
+  })
+}
+
 const findLessonTitle = (course, lessonId) => {
   const lesson = flattenLessons(course).find((item) => item.id === lessonId)
   return lesson?.title || 'Lesson'
+}
+
+const assignmentScopeKey = (courseId, lessonId) => `${courseId}:${lessonId}`
+const uploadMimeByExt = {
+  png: ['image/png'],
+  jpg: ['image/jpeg'],
+  jpeg: ['image/jpeg'],
+  webp: ['image/webp'],
+  gif: ['image/gif'],
+  pdf: ['application/pdf'],
+  zip: ['application/zip'],
+  txt: ['text/plain'],
+  json: ['application/json'],
+}
+const allowedUploadMimes = new Set(Object.values(uploadMimeByExt).flat())
+const uploadExtByMime = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+  'application/pdf': 'pdf',
+  'application/zip': 'zip',
+  'text/plain': 'txt',
+  'application/json': 'json',
+}
+
+const safeUploadFileName = (fileName) => {
+  const ext = path.extname(String(fileName || '')).slice(1).toLowerCase()
+  const base = path
+    .basename(String(fileName || ''), ext ? `.${ext}` : '')
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60)
+  const safeBase = base || 'file'
+  const safeExt = ext.replace(/[^a-z0-9]/g, '').slice(0, 12)
+  return safeExt ? `${safeBase}.${safeExt}` : safeBase
+}
+
+const parseDataUrl = (value) => {
+  const match = String(value || '').match(/^data:([^;]+);base64,(.+)$/)
+  if (!match) return null
+  const mimeType = String(match[1] || '').toLowerCase()
+  const buffer = Buffer.from(match[2], 'base64')
+  return { mimeType, buffer }
+}
+
+const canonicalizeMime = (mimeType) => {
+  const input = String(mimeType || '').toLowerCase()
+  if (input === 'image/jpg') return 'image/jpeg'
+  return input
+}
+
+const detectMimeFromBuffer = (buffer) => {
+  if (!buffer || !buffer.length) return null
+  if (buffer.length >= 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
+    return 'image/png'
+  }
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return 'image/jpeg'
+  }
+  if (buffer.length >= 6) {
+    const head = buffer.slice(0, 6).toString('ascii')
+    if (head === 'GIF87a' || head === 'GIF89a') return 'image/gif'
+  }
+  if (buffer.length >= 12) {
+    const riff = buffer.slice(0, 4).toString('ascii')
+    const webp = buffer.slice(8, 12).toString('ascii')
+    if (riff === 'RIFF' && webp === 'WEBP') return 'image/webp'
+  }
+  if (buffer.length >= 5 && buffer.slice(0, 5).toString('ascii') === '%PDF-') return 'application/pdf'
+  if (buffer.length >= 4 && buffer[0] === 0x50 && buffer[1] === 0x4b && (buffer[2] === 0x03 || buffer[2] === 0x05 || buffer[2] === 0x07) && (buffer[3] === 0x04 || buffer[3] === 0x06 || buffer[3] === 0x08)) {
+    return 'application/zip'
+  }
+  try {
+    const decoder = new TextDecoder('utf-8', { fatal: true })
+    const text = decoder.decode(buffer)
+    if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(text)) return null
+    const trimmed = text.trim()
+    if (!trimmed) return 'text/plain'
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        JSON.parse(trimmed)
+        return 'application/json'
+      } catch {
+        return 'text/plain'
+      }
+    }
+    return 'text/plain'
+  } catch {
+    return null
+  }
+}
+
+const validateUploadMimeAndExtension = (fileName, declaredMime, detectedMime) => {
+  const normalizedDeclared = canonicalizeMime(declaredMime)
+  const normalizedDetected = canonicalizeMime(detectedMime || declaredMime)
+  if (!allowedUploadMimes.has(normalizedDetected)) {
+    return { ok: false, message: 'Unsupported file type.' }
+  }
+  if (normalizedDeclared && normalizedDeclared !== normalizedDetected) {
+    return { ok: false, message: 'File mime type does not match content signature.' }
+  }
+
+  const ext = path.extname(String(fileName || '')).slice(1).toLowerCase()
+  if (ext) {
+    const allowedForExt = uploadMimeByExt[ext]
+    if (!allowedForExt || !allowedForExt.includes(normalizedDetected)) {
+      return { ok: false, message: 'File extension is not compatible with mime type.' }
+    }
+  }
+  return {
+    ok: true,
+    mimeType: normalizedDetected,
+    normalizedFileName: ext ? safeUploadFileName(fileName) : safeUploadFileName(`${fileName}.${uploadExtByMime[normalizedDetected]}`),
+  }
+}
+
+const calculateUserUploadUsage = (db, userId, purpose = 'assignment') =>
+  Object.values(db.uploads || {})
+    .filter((item) => item.ownerId === userId && item.purpose === purpose)
+    .reduce((sum, item) => sum + Number(item.sizeBytes || 0), 0)
+
+const streamToBuffer = async (stream) => {
+  const chunks = []
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+  }
+  return Buffer.concat(chunks)
+}
+
+const createStorageAdapter = () => {
+  if (STORAGE_PROVIDER === 's3') {
+    if (!S3_BUCKET || !S3_ACCESS_KEY_ID || !S3_SECRET_ACCESS_KEY) {
+      throw new Error('S3 storage selected but S3_BUCKET / S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY is missing.')
+    }
+    const s3Client = new S3Client({
+      region: S3_REGION,
+      endpoint: S3_ENDPOINT || undefined,
+      forcePathStyle: S3_FORCE_PATH_STYLE,
+      credentials: {
+        accessKeyId: S3_ACCESS_KEY_ID,
+        secretAccessKey: S3_SECRET_ACCESS_KEY,
+      },
+    })
+    return {
+      async ensure() {
+        return null
+      },
+      async put(storageKey, buffer, meta = {}) {
+        await s3Client.send(
+          new PutObjectCommand({
+            Bucket: S3_BUCKET,
+            Key: storageKey,
+            Body: buffer,
+            ContentType: meta.mimeType || 'application/octet-stream',
+            ContentDisposition: meta.fileName ? `attachment; filename="${meta.fileName}"` : undefined,
+            Metadata: meta.ownerId
+              ? {
+                  ownerid: String(meta.ownerId),
+                  purpose: String(meta.purpose || 'assignment'),
+                }
+              : undefined,
+          }),
+        )
+        return storageKey
+      },
+      async get(storageKey) {
+        const response = await s3Client.send(
+          new GetObjectCommand({
+            Bucket: S3_BUCKET,
+            Key: storageKey,
+          }),
+        )
+        return streamToBuffer(response.Body)
+      },
+      async remove(storageKey) {
+        await s3Client.send(
+          new DeleteObjectCommand({
+            Bucket: S3_BUCKET,
+            Key: storageKey,
+          }),
+        )
+        return null
+      },
+      async getSignedUrl(storageKey, fileName) {
+        const command = new GetObjectCommand({
+          Bucket: S3_BUCKET,
+          Key: storageKey,
+          ResponseContentDisposition: fileName ? `attachment; filename="${safeUploadFileName(fileName)}"` : undefined,
+        })
+        return getSignedS3Url(s3Client, command, {
+          expiresIn: Math.max(60, Math.min(S3_SIGNED_URL_EXPIRES_SEC, 60 * 60)),
+        })
+      },
+      supportsPublicSignedUrl: true,
+    }
+  }
+
+  if (STORAGE_PROVIDER !== 'local') {
+    return {
+      async ensure() {
+        throw new Error(`Storage provider "${STORAGE_PROVIDER}" is not configured.`)
+      },
+      async put() {
+        throw new Error(`Storage provider "${STORAGE_PROVIDER}" is not configured.`)
+      },
+      async get() {
+        throw new Error(`Storage provider "${STORAGE_PROVIDER}" is not configured.`)
+      },
+      async remove() {
+        return null
+      },
+      async getSignedUrl() {
+        return null
+      },
+      supportsPublicSignedUrl: false,
+    }
+  }
+
+  return {
+    async ensure() {
+      await mkdir(UPLOAD_DIR, { recursive: true })
+    },
+    async put(storageKey, buffer) {
+      await writeFile(path.join(UPLOAD_DIR, storageKey), buffer)
+      return storageKey
+    },
+    async get(storageKey) {
+      return readFile(path.join(UPLOAD_DIR, storageKey))
+    },
+    async remove(storageKey) {
+      try {
+        await unlink(path.join(UPLOAD_DIR, storageKey))
+      } catch {
+        return null
+      }
+      return null
+    },
+    async getSignedUrl() {
+      return null
+    },
+    supportsPublicSignedUrl: false,
+  }
+}
+
+const storageAdapter = createStorageAdapter()
+
+const getUploadDownloadUrl = (uploadId) => `/api/uploads/${encodeURIComponent(uploadId)}/data`
+const getUploadSignedUrlEndpoint = (uploadId) => `/api/uploads/${encodeURIComponent(uploadId)}/url`
+
+const buildDefaultAssignment = (course, lesson) => ({
+  id: `asg-${course.id}-${lesson.id}`,
+  title: `Project: ${lesson.title}`,
+  instructions: `${lesson.summary} Upload hasil praktik kamu dalam format link atau lampiran.`,
+  acceptedFormats: ['link', 'attachment'],
+  maxAttachmentMb: 2,
+  dueAt: '2026-03-31T16:59:00.000Z',
+  graceMinutes: 24 * 60,
+  rubric: [
+    {
+      id: 'problem-understanding',
+      label: 'Problem Understanding',
+      description: 'Apakah solusi menunjukkan pemahaman konteks dan kebutuhan user.',
+      maxScore: 40,
+    },
+    {
+      id: 'execution-quality',
+      label: 'Execution Quality',
+      description: 'Kualitas struktur, detail visual, atau implementasi teknis.',
+      maxScore: 40,
+    },
+    {
+      id: 'communication',
+      label: 'Communication',
+      description: 'Kejelasan penjelasan proses, keputusan, dan hasil.',
+      maxScore: 20,
+    },
+  ],
+})
+
+const getAssignmentDefinition = (course, lesson) => {
+  const lessonAssignment = lesson?.assignment
+  if (!lessonAssignment || typeof lessonAssignment !== 'object') {
+    return buildDefaultAssignment(course, lesson)
+  }
+  const fallback = buildDefaultAssignment(course, lesson)
+  return {
+    ...fallback,
+    ...lessonAssignment,
+    rubric: Array.isArray(lessonAssignment.rubric) && lessonAssignment.rubric.length ? lessonAssignment.rubric : fallback.rubric,
+  }
+}
+
+const getAssignmentSubmissions = (db, courseId, lessonId) => {
+  const key = assignmentScopeKey(courseId, lessonId)
+  const items = db.assignmentSubmissions?.[key]
+  if (!Array.isArray(items)) return []
+  return items.map((item) => ({
+    ...item,
+    attachmentId: item.attachmentId || '',
+    attachmentUrl: item.attachmentUrl || '',
+    history: Array.isArray(item.history) ? item.history : [],
+    rubricScores: Array.isArray(item.rubricScores) ? item.rubricScores : [],
+  }))
+}
+
+const getAssignmentWindowStatus = (assignment, now = Date.now()) => {
+  const dueAtIso = assignment?.dueAt || null
+  const dueAtMs = dueAtIso ? Date.parse(dueAtIso) : Number.NaN
+  const graceMinutes = Math.max(0, Number(assignment?.graceMinutes || 0))
+  if (!Number.isFinite(dueAtMs)) {
+    return {
+      hasDeadline: false,
+      dueAt: null,
+      graceMinutes: 0,
+      isLateWindow: false,
+      isClosed: false,
+      lateByMinutes: 0,
+    }
+  }
+  const graceMs = graceMinutes * 60 * 1000
+  const isLateWindow = now > dueAtMs && now <= dueAtMs + graceMs
+  const isClosed = now > dueAtMs + graceMs
+  const lateByMinutes = now > dueAtMs ? Math.floor((now - dueAtMs) / (60 * 1000)) : 0
+  return {
+    hasDeadline: true,
+    dueAt: new Date(dueAtMs).toISOString(),
+    graceMinutes,
+    isLateWindow,
+    isClosed,
+    lateByMinutes,
+  }
+}
+
+const canAccessUpload = (db, user, upload) => {
+  if (!user || !upload) return false
+  if (user.role === 'admin') return true
+  if (upload.ownerId === user.id) return true
+  return Boolean(db?.permissionMatrix?.[user.role || '']?.manageCourse)
+}
+
+const setAssignmentSubmissions = (db, courseId, lessonId, items) => {
+  db.assignmentSubmissions = db.assignmentSubmissions || {}
+  db.assignmentSubmissions[assignmentScopeKey(courseId, lessonId)] = items
+}
+
+const toAssignmentHistoryEntry = (submission, action, actor, previousSnapshot = null) => ({
+  id: `subhist-${Math.random().toString(36).slice(2, 10)}`,
+  action,
+  actor: {
+    id: actor?.id || '',
+    name: actor?.name || actor?.email || 'System',
+    email: actor?.email || '',
+  },
+  createdAt: new Date().toISOString(),
+  previousSnapshot: previousSnapshot || null,
+  snapshot: {
+    status: submission?.status || 'submitted',
+    linkUrl: submission?.linkUrl || '',
+    notes: submission?.notes || '',
+    attachmentName: submission?.attachmentName || '',
+    attachmentId: submission?.attachmentId || '',
+    attachmentUrl: submission?.attachmentUrl || '',
+    feedback: submission?.feedback || '',
+    rubricScores: Array.isArray(submission?.rubricScores) ? submission.rubricScores : [],
+    scorePercent: submission?.scorePercent ?? null,
+    reviewedAt: submission?.reviewedAt || null,
+    submissionMode: submission?.submissionMode || 'on-time',
+    lateByMinutes: Number(submission?.lateByMinutes || 0),
+  },
+})
+
+const calculateRubricScore = (assignment, rubricScores = []) => {
+  const criteria = Array.isArray(assignment?.rubric) ? assignment.rubric : []
+  const maxScore = criteria.reduce((sum, criterion) => sum + Number(criterion.maxScore || 0), 0)
+  if (!maxScore) return { totalScore: 0, maxScore: 0, percentage: null }
+
+  const scoreMap = new Map(rubricScores.map((item) => [item.criterionId, Number(item.score || 0)]))
+  const totalScore = criteria.reduce((sum, criterion) => sum + Math.max(0, Number(scoreMap.get(criterion.id) || 0)), 0)
+  const percentage = Math.round((totalScore / maxScore) * 100)
+  return { totalScore, maxScore, percentage }
 }
 
 const canModerateDiscussion = (user, discussionItem) =>
@@ -1379,23 +2311,198 @@ app.post('/api/users/:id/reset-password', requireAuth, requireAdmin, async (req,
   return res.json(req.db.users)
 })
 
+app.post('/api/uploads', requireAuth, validateBody(uploadCreateSchema), async (req, res) => {
+  const parsed = parseDataUrl(req.body.dataUrl)
+  if (!parsed) return res.status(400).json({ message: 'Invalid dataUrl payload.' })
+  const detectedMime = detectMimeFromBuffer(parsed.buffer)
+  const validated = validateUploadMimeAndExtension(req.body.fileName, parsed.mimeType, detectedMime)
+  if (!validated.ok) return res.status(400).json({ message: validated.message })
+  if (parsed.buffer.length > MAX_ASSIGNMENT_UPLOAD_BYTES) {
+    return res.status(400).json({ message: 'File size exceeds 2MB limit.' })
+  }
+  const nextUsage = calculateUserUploadUsage(req.db, req.user.id, req.body.purpose || 'assignment') + parsed.buffer.length
+  if (nextUsage > MAX_ASSIGNMENT_UPLOAD_TOTAL_BYTES) {
+    return res.status(400).json({ message: 'User upload quota exceeded (20MB).' })
+  }
+
+  const seq = req.db.nextUploadSeq || 1
+  const uploadId = `upl-${seq}`
+  req.db.nextUploadSeq = seq + 1
+
+  const safeName = validated.normalizedFileName
+  const storageName = `${uploadId}-${safeName}`
+  await storageAdapter.put(storageName, parsed.buffer, {
+    ownerId: req.user.id,
+    purpose: req.body.purpose || 'assignment',
+    mimeType: validated.mimeType,
+    fileName: req.body.fileName,
+  })
+
+  req.db.uploads[uploadId] = {
+    id: uploadId,
+    fileName: req.body.fileName,
+    safeName,
+    storageName,
+    mimeType: validated.mimeType,
+    sizeBytes: parsed.buffer.length,
+    ownerId: req.user.id,
+    purpose: req.body.purpose || 'assignment',
+    uploadedAt: new Date().toISOString(),
+  }
+
+  addAuditLog(req.db, {
+    actor: req.user.email,
+    action: 'upload_create',
+    target: uploadId,
+    detail: `Uploaded file ${req.body.fileName}.`,
+  })
+  await writeDb(req.db)
+
+  return res.status(201).json({
+    id: uploadId,
+    fileName: req.body.fileName,
+    mimeType: validated.mimeType,
+    sizeBytes: parsed.buffer.length,
+    uploadedAt: req.db.uploads[uploadId].uploadedAt,
+    downloadUrl: getUploadDownloadUrl(uploadId),
+    signedUrlEndpoint: getUploadSignedUrlEndpoint(uploadId),
+  })
+})
+
+app.get('/api/uploads/:uploadId/data', requireAuth, async (req, res) => {
+  const upload = req.db.uploads?.[req.params.uploadId]
+  if (!upload) return res.status(404).json({ message: 'Upload not found.' })
+  if (!canAccessUpload(req.db, req.user, upload)) {
+    return res.status(403).json({ message: 'Not allowed to access this file.' })
+  }
+  try {
+    const fileBuffer = await storageAdapter.get(upload.storageName)
+    const dataUrl = `data:${upload.mimeType};base64,${fileBuffer.toString('base64')}`
+    return res.json({
+      id: upload.id,
+      fileName: upload.fileName,
+      mimeType: upload.mimeType,
+      sizeBytes: upload.sizeBytes,
+      dataUrl,
+    })
+  } catch {
+    return res.status(404).json({ message: 'Stored file not found.' })
+  }
+})
+
+app.get('/api/uploads/:uploadId/url', requireAuth, async (req, res) => {
+  const upload = req.db.uploads?.[req.params.uploadId]
+  if (!upload) return res.status(404).json({ message: 'Upload not found.' })
+  if (!canAccessUpload(req.db, req.user, upload)) {
+    return res.status(403).json({ message: 'Not allowed to access this file.' })
+  }
+  if (!storageAdapter.supportsPublicSignedUrl) {
+    return res.json({
+      url: '',
+      requiresAuth: true,
+      fallbackDataEndpoint: getUploadDownloadUrl(upload.id),
+    })
+  }
+
+  const signedUrl = await storageAdapter.getSignedUrl(upload.storageName, upload.fileName)
+  return res.json({
+    url: signedUrl,
+    requiresAuth: false,
+    expiresInSec: Math.max(60, Math.min(S3_SIGNED_URL_EXPIRES_SEC, 60 * 60)),
+  })
+})
+
 app.get('/api/courses', requireAuth, async (req, res) => {
   const courses = req.db.courses || []
   const userId = req.user.id
   const cards = courses.map((course) => {
     const state = ensureCourseState(req.db, userId, course)
-    return toCourseCard(buildCourseView(course, state))
+    const moduleQuizGateByModuleId = getModuleQuizGateByModuleId(req.db, userId, course)
+    return toCourseCard(buildCourseView(course, state, { moduleQuizGateByModuleId }))
   })
   await writeDb(req.db)
   return res.json(cards)
+})
+
+app.get('/api/courses/continue', requireAuth, async (req, res) => {
+  const payload = buildContinueLearning(req.db, req.user.id)
+  await writeDb(req.db)
+  return res.json(payload || null)
 })
 
 app.get('/api/courses/:id', requireAuth, async (req, res) => {
   const course = (req.db.courses || []).find((item) => item.id === req.params.id)
   if (!course) return res.status(404).json({ message: 'Course not found.' })
   const state = ensureCourseState(req.db, req.user.id, course)
-  const view = buildCourseView(course, state)
+  const moduleQuizGateByModuleId = getModuleQuizGateByModuleId(req.db, req.user.id, course)
+  const view = buildCourseView(course, state, { moduleQuizGateByModuleId })
   await writeDb(req.db)
+  return res.json(view)
+})
+
+app.get('/api/analytics/learning', requireAuth, async (req, res) => {
+  const data = buildLearningAnalytics(req.db, req.user.id)
+  await writeDb(req.db)
+  return res.json(data)
+})
+
+app.patch('/api/courses/:id/modules/:moduleId/prerequisite', requireAuth, validateBody(modulePrerequisiteSchema), async (req, res) => {
+  if (!canReviewAssignmentRole(req.db, req.user)) {
+    return res.status(403).json({ message: 'Instructor/Admin access required.' })
+  }
+  const course = (req.db.courses || []).find((item) => item.id === req.params.id)
+  if (!course) return res.status(404).json({ message: 'Course not found.' })
+  const module = (course.modules || []).find((item) => item.id === req.params.moduleId)
+  if (!module) return res.status(404).json({ message: 'Module not found.' })
+
+  const rules = (req.body.rules || [])
+    .filter((rule) =>
+      rule.type === 'lesson-complete'
+        ? Boolean(rule.lessonId)
+        : rule.type === 'module-complete' || rule.type === 'module-quiz-pass'
+          ? Boolean(rule.moduleId)
+          : false,
+    )
+    .map((rule) => ({
+      type: rule.type,
+      moduleId: rule.moduleId || undefined,
+      lessonId: rule.lessonId || undefined,
+    }))
+
+  req.db.courses = (req.db.courses || []).map((item) =>
+    item.id !== course.id
+      ? item
+      : {
+          ...item,
+          modules: (item.modules || []).map((mod) =>
+            mod.id !== module.id
+              ? mod
+              : {
+                  ...mod,
+                  prerequisite: {
+                    mode: req.body.mode === 'any' ? 'any' : 'all',
+                    rules,
+                  },
+                },
+          ),
+        },
+  )
+
+  addAuditLog(req.db, {
+    actor: req.user.email,
+    action: 'course_module_prerequisite_update',
+    target: `${course.id}:${module.id}`,
+    detail: `Updated prerequisite for module ${module.title}.`,
+  })
+
+  await writeDb(req.db)
+  const updatedCourse = (req.db.courses || []).find((item) => item.id === course.id)
+  const state = ensureCourseState(req.db, req.user.id, updatedCourse)
+  const view = buildCourseView(
+    updatedCourse,
+    state,
+    { moduleQuizGateByModuleId: getModuleQuizGateByModuleId(req.db, req.user.id, updatedCourse) },
+  )
   return res.json(view)
 })
 
@@ -1405,13 +2512,15 @@ app.post('/api/courses/:id/lessons/:lessonId/select', requireAuth, async (req, r
 
   const userId = req.user.id
   const state = ensureCourseState(req.db, userId, course)
-  const view = buildCourseView(course, state)
+  const moduleQuizGateByModuleId = getModuleQuizGateByModuleId(req.db, userId, course)
+  const view = buildCourseView(course, state, { moduleQuizGateByModuleId })
   const lessons = view.modules.flatMap((module) => module.lessons)
   const lesson = lessons.find((item) => item.id === req.params.lessonId)
   if (!lesson) return res.status(404).json({ message: 'Lesson not found.' })
   if (lesson.isLocked) return res.status(403).json({ message: 'Lesson is still locked.' })
 
   req.db.courseProgress[userId][course.id].activeLessonId = lesson.id
+  req.db.courseProgress[userId][course.id].lastTouchedAt = new Date().toISOString()
   addAuditLog(req.db, {
     actor: req.user.email,
     action: 'course_select_lesson',
@@ -1419,7 +2528,11 @@ app.post('/api/courses/:id/lessons/:lessonId/select', requireAuth, async (req, r
     detail: `Selected lesson ${lesson.title}.`,
   })
   await writeDb(req.db)
-  return res.json(buildCourseView(course, req.db.courseProgress[userId][course.id]))
+  return res.json(
+    buildCourseView(course, req.db.courseProgress[userId][course.id], {
+      moduleQuizGateByModuleId: getModuleQuizGateByModuleId(req.db, userId, course),
+    }),
+  )
 })
 
 app.post('/api/courses/:id/lessons/:lessonId/complete', requireAuth, async (req, res) => {
@@ -1428,11 +2541,19 @@ app.post('/api/courses/:id/lessons/:lessonId/complete', requireAuth, async (req,
 
   const userId = req.user.id
   const state = ensureCourseState(req.db, userId, course)
-  const view = buildCourseView(course, state)
+  const moduleQuizGateByModuleId = getModuleQuizGateByModuleId(req.db, userId, course)
+  const view = buildCourseView(course, state, { moduleQuizGateByModuleId })
   const lessons = view.modules.flatMap((module) => module.lessons)
   const lesson = lessons.find((item) => item.id === req.params.lessonId)
   if (!lesson) return res.status(404).json({ message: 'Lesson not found.' })
   if (lesson.isLocked) return res.status(403).json({ message: 'Lesson is still locked.' })
+  if (!lesson.canComplete) {
+    return res.status(400).json({
+      message: lesson.completionGateReason || 'Complete lesson requirement first.',
+      requiredProgressPercent: lesson.completionRequiredPercent || VIDEO_COMPLETION_THRESHOLD_PERCENT,
+      currentProgressPercent: Number(lesson.playback?.progressPercent || 0),
+    })
+  }
 
   const completedSet = new Set(req.db.courseProgress[userId][course.id].completedLessonIds)
   completedSet.add(lesson.id)
@@ -1441,6 +2562,7 @@ app.post('/api/courses/:id/lessons/:lessonId/complete', requireAuth, async (req,
   const currentIndex = lessons.findIndex((item) => item.id === lesson.id)
   const nextLesson = currentIndex >= 0 ? lessons[currentIndex + 1] : null
   req.db.courseProgress[userId][course.id].activeLessonId = nextLesson?.id || lesson.id
+  req.db.courseProgress[userId][course.id].lastTouchedAt = new Date().toISOString()
 
   addAuditLog(req.db, {
     actor: req.user.email,
@@ -1449,7 +2571,144 @@ app.post('/api/courses/:id/lessons/:lessonId/complete', requireAuth, async (req,
     detail: `Completed lesson ${lesson.title}.`,
   })
   await writeDb(req.db)
-  return res.json(buildCourseView(course, req.db.courseProgress[userId][course.id]))
+  return res.json(
+    buildCourseView(course, req.db.courseProgress[userId][course.id], {
+      moduleQuizGateByModuleId: getModuleQuizGateByModuleId(req.db, userId, course),
+    }),
+  )
+})
+
+app.post(
+  '/api/courses/:id/lessons/:lessonId/playback',
+  requireAuth,
+  validateBody(lessonPlaybackSchema),
+  async (req, res) => {
+    const course = (req.db.courses || []).find((item) => item.id === req.params.id)
+    if (!course) return res.status(404).json({ message: 'Course not found.' })
+
+    const userId = req.user.id
+    const state = ensureCourseState(req.db, userId, course)
+    const moduleQuizGateByModuleId = getModuleQuizGateByModuleId(req.db, userId, course)
+    const view = buildCourseView(course, state, { moduleQuizGateByModuleId })
+    const lessons = view.modules.flatMap((module) => module.lessons)
+    const lesson = lessons.find((item) => item.id === req.params.lessonId)
+    if (!lesson) return res.status(404).json({ message: 'Lesson not found.' })
+    if (lesson.isLocked) return res.status(403).json({ message: 'Lesson is still locked.' })
+
+    const durationSec = Math.max(0, Math.floor(Number(req.body.durationSec || lesson.playback?.durationSec || 0)))
+    const rawPosition = Math.max(0, Math.floor(Number(req.body.positionSec || 0)))
+    const positionSec = durationSec > 0 ? Math.min(rawPosition, durationSec) : rawPosition
+    const previous = req.db.courseProgress[userId][course.id].lessonPlayback?.[lesson.id] || {}
+    const prevPosition = Math.max(0, Math.floor(Number(previous.positionSec || 0)))
+    const step = Math.max(0, positionSec - prevPosition)
+    const treatAsContinuousWatch = step > 0 && step <= MAX_WATCH_STEP_SEC
+    const watchedRanges = treatAsContinuousWatch
+      ? appendWatchedRange(previous.watchedRanges || [], prevPosition, positionSec, durationSec)
+      : normalizeRanges(previous.watchedRanges || [], durationSec)
+    const watchedSec = sumRangeDuration(watchedRanges)
+    const watchedDeltaSec = Math.max(0, watchedSec - Math.floor(Number(previous.watchedSec || 0)))
+    const progressPercent = durationSec > 0 ? Math.round((watchedSec / durationSec) * 100) : 0
+    const isCompletedVideo = Boolean(req.body.markCompleted) || progressPercent >= VIDEO_COMPLETION_THRESHOLD_PERCENT
+
+    req.db.courseProgress[userId][course.id].lessonPlayback = req.db.courseProgress[userId][course.id].lessonPlayback || {}
+    req.db.courseProgress[userId][course.id].lessonPlayback[lesson.id] = {
+      positionSec,
+      durationSec,
+      watchedSec,
+      watchedRanges,
+      progressPercent: Math.max(0, Math.min(100, progressPercent)),
+      completedVideoAt: isCompletedVideo ? previous.completedVideoAt || new Date().toISOString() : previous.completedVideoAt || null,
+    }
+    req.db.courseProgress[userId][course.id].lastTouchedAt = new Date().toISOString()
+    req.db.courseProgress[userId][course.id].studyEvents = req.db.courseProgress[userId][course.id].studyEvents || []
+    if (watchedDeltaSec > 0) {
+      req.db.courseProgress[userId][course.id].studyEvents = [
+        {
+          at: new Date().toISOString(),
+          lessonId: lesson.id,
+          seconds: watchedDeltaSec,
+        },
+        ...req.db.courseProgress[userId][course.id].studyEvents,
+      ].slice(0, 800)
+    }
+
+    await writeDb(req.db)
+    const completionGate = getLessonCompletionGate(lesson, req.db.courseProgress[userId][course.id].lessonPlayback[lesson.id])
+    return res.json({
+      ...req.db.courseProgress[userId][course.id].lessonPlayback[lesson.id],
+      canComplete: completionGate.canComplete,
+      completionRequiredPercent: completionGate.requiredProgressPercent,
+      completionGateReason: completionGate.reason,
+    })
+  },
+)
+
+app.get('/api/courses/:id/lessons/:lessonId/notes', requireAuth, async (req, res) => {
+  const { course, lesson } = findCourseAndLesson(req.db, req.params.id, req.params.lessonId)
+  if (!course) return res.status(404).json({ message: 'Course not found.' })
+  if (!lesson) return res.status(404).json({ message: 'Lesson not found.' })
+  const notes = listLessonNotes(req.db, req.user.id, course.id, lesson.id)
+  await writeDb(req.db)
+  return res.json(notes)
+})
+
+app.post('/api/courses/:id/lessons/:lessonId/notes', requireAuth, validateBody(lessonNoteCreateSchema), async (req, res) => {
+  const { course, lesson } = findCourseAndLesson(req.db, req.params.id, req.params.lessonId)
+  if (!course) return res.status(404).json({ message: 'Course not found.' })
+  if (!lesson) return res.status(404).json({ message: 'Lesson not found.' })
+
+  const nowIso = new Date().toISOString()
+  const noteItem = {
+    id: `note-${Math.random().toString(36).slice(2, 10)}`,
+    timestampSec: Math.max(0, Math.floor(Number(req.body.timestampSec || 0))),
+    note: String(req.body.note || '').trim(),
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  }
+  const notes = [...listLessonNotes(req.db, req.user.id, course.id, lesson.id), noteItem]
+  writeLessonNotes(req.db, req.user.id, course.id, lesson.id, notes)
+  await writeDb(req.db)
+  return res.status(201).json(listLessonNotes(req.db, req.user.id, course.id, lesson.id))
+})
+
+app.patch(
+  '/api/courses/:id/lessons/:lessonId/notes/:noteId',
+  requireAuth,
+  validateBody(lessonNoteUpdateSchema),
+  async (req, res) => {
+    const { course, lesson } = findCourseAndLesson(req.db, req.params.id, req.params.lessonId)
+    if (!course) return res.status(404).json({ message: 'Course not found.' })
+    if (!lesson) return res.status(404).json({ message: 'Lesson not found.' })
+
+    const current = listLessonNotes(req.db, req.user.id, course.id, lesson.id)
+    const target = current.find((item) => item.id === req.params.noteId)
+    if (!target) return res.status(404).json({ message: 'Note not found.' })
+    const next = current.map((item) =>
+      item.id === req.params.noteId
+        ? {
+            ...item,
+            note: String(req.body.note || '').trim(),
+            updatedAt: new Date().toISOString(),
+          }
+        : item,
+    )
+    writeLessonNotes(req.db, req.user.id, course.id, lesson.id, next)
+    await writeDb(req.db)
+    return res.json(listLessonNotes(req.db, req.user.id, course.id, lesson.id))
+  },
+)
+
+app.delete('/api/courses/:id/lessons/:lessonId/notes/:noteId', requireAuth, async (req, res) => {
+  const { course, lesson } = findCourseAndLesson(req.db, req.params.id, req.params.lessonId)
+  if (!course) return res.status(404).json({ message: 'Course not found.' })
+  if (!lesson) return res.status(404).json({ message: 'Lesson not found.' })
+
+  const current = listLessonNotes(req.db, req.user.id, course.id, lesson.id)
+  const next = current.filter((item) => item.id !== req.params.noteId)
+  if (next.length === current.length) return res.status(404).json({ message: 'Note not found.' })
+  writeLessonNotes(req.db, req.user.id, course.id, lesson.id, next)
+  await writeDb(req.db)
+  return res.json(listLessonNotes(req.db, req.user.id, course.id, lesson.id))
 })
 
 app.get('/api/courses/:id/lessons/:lessonId/discussions', requireAuth, async (req, res) => {
@@ -1558,6 +2817,236 @@ app.delete('/api/courses/:id/lessons/:lessonId/discussions/:discussionId', requi
   await writeDb(req.db)
   return res.json(req.db.discussions[key])
 })
+
+app.get('/api/courses/:id/lessons/:lessonId/assignment', requireAuth, async (req, res) => {
+  const { course, lesson } = findCourseAndLesson(req.db, req.params.id, req.params.lessonId)
+  if (!course) return res.status(404).json({ message: 'Course not found.' })
+  if (!lesson) return res.status(404).json({ message: 'Lesson not found.' })
+
+  const assignment = getAssignmentDefinition(course, lesson)
+  const windowStatus = getAssignmentWindowStatus(assignment, Date.now())
+  const submissions = getAssignmentSubmissions(req.db, course.id, lesson.id).slice().sort((a, b) => String(b.updatedAt || b.submittedAt).localeCompare(String(a.updatedAt || a.submittedAt)))
+  const mySubmission = submissions.find((item) => item.userId === req.user.id) || null
+
+  return res.json({
+    assignment,
+    windowStatus,
+    serverTime: new Date().toISOString(),
+    mySubmission,
+    submissions: canReviewAssignmentRole(req.db, req.user) ? submissions : [],
+  })
+})
+
+app.patch(
+  '/api/courses/:id/lessons/:lessonId/assignment-config',
+  requireAuth,
+  validateBody(assignmentConfigSchema),
+  async (req, res) => {
+    if (!canReviewAssignmentRole(req.db, req.user)) {
+      return res.status(403).json({ message: 'Instructor/Admin access required.' })
+    }
+    const { course, lesson } = findCourseAndLesson(req.db, req.params.id, req.params.lessonId)
+    if (!course) return res.status(404).json({ message: 'Course not found.' })
+    if (!lesson) return res.status(404).json({ message: 'Lesson not found.' })
+
+    const dueAt = req.body.dueAt === null ? null : req.body.dueAt ?? lesson.assignment?.dueAt ?? null
+    const graceMinutes = Number.isFinite(req.body.graceMinutes)
+      ? Number(req.body.graceMinutes)
+      : Number(lesson.assignment?.graceMinutes || 24 * 60)
+
+    updateLessonAssignmentConfig(req.db, course.id, lesson.id, (current) => ({
+      ...current,
+      dueAt,
+      graceMinutes: Math.max(0, graceMinutes),
+    }))
+
+    addAuditLog(req.db, {
+      actor: req.user.email,
+      action: 'assignment_config_update',
+      target: `${course.id}:${lesson.id}`,
+      detail: `Updated assignment deadline config.`,
+    })
+    await writeDb(req.db)
+
+    const updated = findCourseAndLesson(req.db, course.id, lesson.id)
+    const assignment = getAssignmentDefinition(updated.course, updated.lesson)
+    return res.json({
+      assignment,
+      windowStatus: getAssignmentWindowStatus(assignment, Date.now()),
+      serverTime: new Date().toISOString(),
+    })
+  },
+)
+
+app.post(
+  '/api/courses/:id/lessons/:lessonId/submission',
+  requireAuth,
+  validateBody(assignmentSubmissionSchema),
+  async (req, res) => {
+    const { course, lesson } = findCourseAndLesson(req.db, req.params.id, req.params.lessonId)
+    if (!course) return res.status(404).json({ message: 'Course not found.' })
+    if (!lesson) return res.status(404).json({ message: 'Lesson not found.' })
+
+    const assignment = getAssignmentDefinition(course, lesson)
+    const windowStatus = getAssignmentWindowStatus(assignment, Date.now())
+    if (windowStatus.isClosed) {
+      return res.status(403).json({ message: 'Submission window is closed.' })
+    }
+    const linkUrl = String(req.body.linkUrl || '').trim()
+    const notes = String(req.body.notes || '').trim()
+    const attachmentName = String(req.body.attachmentName || '').trim()
+    const attachmentDataUrl = String(req.body.attachmentDataUrl || '').trim()
+    const attachmentId = String(req.body.attachmentId || '').trim()
+
+    if (!linkUrl && !notes && !attachmentDataUrl && !attachmentId) {
+      return res.status(400).json({ message: 'Isi minimal salah satu: link, catatan, atau lampiran.' })
+    }
+    if (attachmentDataUrl && !attachmentDataUrl.startsWith('data:')) {
+      return res.status(400).json({ message: 'Lampiran tidak valid.' })
+    }
+
+    let attachmentMeta = null
+    if (attachmentId) {
+      const upload = req.db.uploads?.[attachmentId]
+      if (!upload) return res.status(404).json({ message: 'Attachment upload not found.' })
+      if (upload.ownerId !== req.user.id && req.user.role !== 'admin') {
+        return res.status(403).json({ message: 'Attachment does not belong to this user.' })
+      }
+      if (upload.purpose !== 'assignment') {
+        return res.status(400).json({ message: 'Attachment purpose is not valid for assignment.' })
+      }
+      attachmentMeta = upload
+    }
+
+    const current = getAssignmentSubmissions(req.db, course.id, lesson.id)
+    const existing = current.find((item) => item.userId === req.user.id)
+    const nowIso = new Date().toISOString()
+    const previousSnapshot = existing?.history?.[0]?.snapshot || null
+    const nextHistory = existing
+      ? [toAssignmentHistoryEntry(existing, 'resubmitted', req.user, previousSnapshot), ...(existing.history || [])].slice(0, 40)
+      : []
+    const nextSubmission = {
+      id: existing?.id || `sub-${Math.random().toString(36).slice(2, 10)}`,
+      courseId: course.id,
+      lessonId: lesson.id,
+      assignmentId: assignment.id,
+      userId: req.user.id,
+      userName: req.user.name,
+      userEmail: req.user.email,
+      status: 'submitted',
+      linkUrl,
+      notes,
+      attachmentId: attachmentMeta?.id || '',
+      attachmentName: attachmentMeta?.fileName || attachmentName,
+      attachmentUrl: attachmentMeta?.id ? getUploadDownloadUrl(attachmentMeta.id) : '',
+      attachmentMimeType: attachmentMeta?.mimeType || '',
+      attachmentSizeBytes: attachmentMeta?.sizeBytes || 0,
+      attachmentDataUrl: attachmentMeta ? '' : attachmentDataUrl,
+      submittedAt: existing?.submittedAt || nowIso,
+      updatedAt: nowIso,
+      submissionMode: windowStatus.isLateWindow ? 'late' : 'on-time',
+      lateByMinutes: windowStatus.isLateWindow ? windowStatus.lateByMinutes : 0,
+      reviewedAt: null,
+      reviewedBy: null,
+      feedback: '',
+      rubricScores: [],
+      scorePercent: null,
+      history: nextHistory,
+    }
+
+    const updated = existing
+      ? current.map((item) => (item.id === existing.id ? nextSubmission : item))
+      : [nextSubmission, ...current]
+    setAssignmentSubmissions(req.db, course.id, lesson.id, updated)
+
+    addAuditLog(req.db, {
+      actor: req.user.email,
+      action: 'assignment_submit',
+      target: `${course.id}:${lesson.id}:${nextSubmission.id}`,
+      detail: `Submitted assignment for ${lesson.title}.`,
+    })
+    await writeDb(req.db)
+    return res.status(existing ? 200 : 201).json(nextSubmission)
+  },
+)
+
+app.patch(
+  '/api/courses/:id/lessons/:lessonId/submissions/:submissionId/review',
+  requireAuth,
+  validateBody(assignmentReviewSchema),
+  async (req, res) => {
+    if (!canReviewAssignmentRole(req.db, req.user)) {
+      return res.status(403).json({ message: 'Instructor/Admin access required.' })
+    }
+
+    const { course, lesson } = findCourseAndLesson(req.db, req.params.id, req.params.lessonId)
+    if (!course) return res.status(404).json({ message: 'Course not found.' })
+    if (!lesson) return res.status(404).json({ message: 'Lesson not found.' })
+
+    const assignment = getAssignmentDefinition(course, lesson)
+    const rubricCriteria = Array.isArray(assignment.rubric) ? assignment.rubric : []
+    const rubricMap = new Map(rubricCriteria.map((criterion) => [criterion.id, criterion]))
+    const current = getAssignmentSubmissions(req.db, course.id, lesson.id)
+    const target = current.find((item) => item.id === req.params.submissionId)
+
+    if (!target) return res.status(404).json({ message: 'Submission not found.' })
+
+    const payloadScores = Array.isArray(req.body.rubricScores) ? req.body.rubricScores : target.rubricScores || []
+    const normalizedScores = []
+    for (const item of payloadScores) {
+      const criterion = rubricMap.get(item.criterionId)
+      if (!criterion) {
+        return res.status(400).json({ message: `Unknown rubric criterion: ${item.criterionId}` })
+      }
+      if (item.score > Number(criterion.maxScore || 0)) {
+        return res.status(400).json({ message: `Score for ${criterion.label} exceeds max ${criterion.maxScore}` })
+      }
+      normalizedScores.push({
+        criterionId: item.criterionId,
+        score: Math.max(0, Number(item.score || 0)),
+        comment: String(item.comment || '').trim(),
+      })
+    }
+
+    const scoreMeta = calculateRubricScore(assignment, normalizedScores)
+    const nextFeedback = typeof req.body.feedback === 'string' ? req.body.feedback.trim() : String(target.feedback || '')
+    const nowIso = new Date().toISOString()
+    const previousSnapshot = target?.history?.[0]?.snapshot || null
+    const reviewedBy = {
+      id: req.user.id,
+      name: req.user.name,
+      email: req.user.email,
+    }
+
+    const nextSubmission = {
+      ...target,
+      status: req.body.status,
+      feedback: nextFeedback,
+      rubricScores: normalizedScores,
+      scorePercent: req.body.status === 'graded' ? scoreMeta.percentage : null,
+      reviewedAt: nowIso,
+      reviewedBy,
+      updatedAt: nowIso,
+      history: [toAssignmentHistoryEntry(target, 'reviewed', req.user, previousSnapshot), ...(target.history || [])].slice(0, 40),
+    }
+
+    setAssignmentSubmissions(
+      req.db,
+      course.id,
+      lesson.id,
+      current.map((item) => (item.id === target.id ? nextSubmission : item)),
+    )
+
+    addAuditLog(req.db, {
+      actor: req.user.email,
+      action: 'assignment_review',
+      target: `${course.id}:${lesson.id}:${target.id}`,
+      detail: `Set submission status to ${req.body.status} for ${target.userName}.`,
+    })
+    await writeDb(req.db)
+    return res.json(nextSubmission)
+  },
+)
 
 app.get('/api/quizzes/:id', requireAuth, async (req, res) => {
   const quiz = getQuizById(req.db, req.params.id)

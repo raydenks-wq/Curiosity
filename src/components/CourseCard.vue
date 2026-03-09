@@ -11,6 +11,11 @@
         {{ course.activeLessonTitle || 'Mulai lesson pertama' }} · {{ course.completedLessons || 0 }}/{{ course.totalLessons || 0 }}
         lesson
       </p>
+      <p v-if="course.blockedLessons" class="course-lock-alert">
+        {{ course.blockedLessons }} lesson terkunci
+        <span v-if="course.nextLockedLessonTitle">· {{ course.nextLockedLessonTitle }}</span>
+      </p>
+      <p v-if="course.nextLockReason" class="course-lock-reason">{{ course.nextLockReason }}</p>
 
       <div class="progress-row">
         <div class="progress-track">

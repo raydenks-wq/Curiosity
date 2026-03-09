@@ -178,9 +178,19 @@ export const httpAdapter = {
         auth: true,
       }),
   },
+  analytics: {
+    getLearning: () =>
+      httpClient.request('/analytics/learning', {
+        auth: true,
+      }),
+  },
   courses: {
     listCourses: () =>
       httpClient.request('/courses', {
+        auth: true,
+      }),
+    getContinueLearning: () =>
+      httpClient.request('/courses/continue', {
         auth: true,
       }),
     getCourse: (courseId) =>
@@ -196,6 +206,39 @@ export const httpAdapter = {
       httpClient.request(`/courses/${encodeURIComponent(courseId)}/lessons/${encodeURIComponent(lessonId)}/complete`, {
         method: 'POST',
         auth: true,
+      }),
+    saveLessonPlayback: (courseId, lessonId, payload) =>
+      httpClient.request(`/courses/${encodeURIComponent(courseId)}/lessons/${encodeURIComponent(lessonId)}/playback`, {
+        method: 'POST',
+        auth: true,
+        body: payload,
+      }),
+    listLessonNotes: (courseId, lessonId) =>
+      httpClient.request(`/courses/${encodeURIComponent(courseId)}/lessons/${encodeURIComponent(lessonId)}/notes`, {
+        auth: true,
+      }),
+    addLessonNote: (courseId, lessonId, payload) =>
+      httpClient.request(`/courses/${encodeURIComponent(courseId)}/lessons/${encodeURIComponent(lessonId)}/notes`, {
+        method: 'POST',
+        auth: true,
+        body: payload,
+      }),
+    updateLessonNote: (courseId, lessonId, noteId, payload) =>
+      httpClient.request(`/courses/${encodeURIComponent(courseId)}/lessons/${encodeURIComponent(lessonId)}/notes/${encodeURIComponent(noteId)}`, {
+        method: 'PATCH',
+        auth: true,
+        body: payload,
+      }),
+    deleteLessonNote: (courseId, lessonId, noteId) =>
+      httpClient.request(`/courses/${encodeURIComponent(courseId)}/lessons/${encodeURIComponent(lessonId)}/notes/${encodeURIComponent(noteId)}`, {
+        method: 'DELETE',
+        auth: true,
+      }),
+    updateModulePrerequisite: (courseId, moduleId, payload) =>
+      httpClient.request(`/courses/${encodeURIComponent(courseId)}/modules/${encodeURIComponent(moduleId)}/prerequisite`, {
+        method: 'PATCH',
+        auth: true,
+        body: payload,
       }),
     listDiscussion: (courseId, lessonId) =>
       httpClient.request(`/courses/${encodeURIComponent(courseId)}/lessons/${encodeURIComponent(lessonId)}/discussions`, {
@@ -224,6 +267,59 @@ export const httpAdapter = {
           auth: true,
         },
       ),
+    getAssignment: (courseId, lessonId) =>
+      httpClient.request(`/courses/${encodeURIComponent(courseId)}/lessons/${encodeURIComponent(lessonId)}/assignment`, {
+        auth: true,
+      }),
+    updateAssignmentConfig: (courseId, lessonId, payload) =>
+      httpClient.request(`/courses/${encodeURIComponent(courseId)}/lessons/${encodeURIComponent(lessonId)}/assignment-config`, {
+        method: 'PATCH',
+        auth: true,
+        body: payload,
+      }),
+    submitAssignment: async (courseId, lessonId, payload) => {
+      let attachmentId = String(payload?.attachmentId || '').trim()
+      if (!attachmentId && payload?.attachmentDataUrl) {
+        const upload = await httpClient.request('/uploads', {
+          method: 'POST',
+          auth: true,
+          body: {
+            fileName: payload?.attachmentName || 'attachment',
+            dataUrl: payload.attachmentDataUrl,
+            purpose: 'assignment',
+          },
+        })
+        attachmentId = upload?.id || ''
+      }
+      return httpClient.request(`/courses/${encodeURIComponent(courseId)}/lessons/${encodeURIComponent(lessonId)}/submission`, {
+        method: 'POST',
+        auth: true,
+        body: {
+          linkUrl: payload?.linkUrl || '',
+          notes: payload?.notes || '',
+          attachmentName: payload?.attachmentName || '',
+          attachmentDataUrl: attachmentId ? '' : payload?.attachmentDataUrl || '',
+          attachmentId,
+        },
+      })
+    },
+    reviewSubmission: (courseId, lessonId, submissionId, payload) =>
+      httpClient.request(
+        `/courses/${encodeURIComponent(courseId)}/lessons/${encodeURIComponent(lessonId)}/submissions/${encodeURIComponent(submissionId)}/review`,
+        {
+          method: 'PATCH',
+          auth: true,
+          body: payload,
+        },
+      ),
+    getAttachmentData: (uploadId) =>
+      httpClient.request(`/uploads/${encodeURIComponent(uploadId)}/data`, {
+        auth: true,
+      }),
+    getAttachmentUrl: (uploadId) =>
+      httpClient.request(`/uploads/${encodeURIComponent(uploadId)}/url`, {
+        auth: true,
+      }),
   },
   quiz: {
     list: () =>

@@ -382,6 +382,23 @@ describe('Curiosity API integration', () => {
     const selectLocked = await request(app).post('/api/courses/ui-101/lessons/ui-101-l2/select').set(authHeader)
     expect(selectLocked.status).toBe(403)
 
+    const blockedComplete = await request(app).post('/api/courses/ui-101/lessons/ui-101-l1/complete').set(authHeader)
+    expect(blockedComplete.status).toBe(400)
+
+    const checkpoints = [12, 24, 36, 48, 60, 72, 84, 96, 108]
+    let unlockCompletion = null
+    for (const positionSec of checkpoints) {
+      unlockCompletion = await request(app)
+        .post('/api/courses/ui-101/lessons/ui-101-l1/playback')
+        .set(authHeader)
+        .send({
+          positionSec,
+          durationSec: 120,
+        })
+      expect(unlockCompletion.status).toBe(200)
+    }
+    expect(unlockCompletion.body.progressPercent).toBeGreaterThanOrEqual(90)
+
     const completeFirst = await request(app).post('/api/courses/ui-101/lessons/ui-101-l1/complete').set(authHeader)
     expect(completeFirst.status).toBe(200)
     expect(completeFirst.body.completedLessons).toBe(1)
@@ -390,6 +407,316 @@ describe('Curiosity API integration', () => {
     const selectSecond = await request(app).post('/api/courses/ui-101/lessons/ui-101-l2/select').set(authHeader)
     expect(selectSecond.status).toBe(200)
     expect(selectSecond.body.activeLesson.id).toBe('ui-101-l2')
+  })
+
+  it('saves lesson playback progress for resume', async () => {
+    const login = await loginAs('indra@curiosity.app', 'admin123')
+    const authHeader = { Authorization: `Bearer ${login.body.token}` }
+
+    await request(app)
+      .post('/api/courses/ui-101/lessons/ui-101-l1/playback')
+      .set(authHeader)
+      .send({
+        positionSec: 12,
+        durationSec: 120,
+      })
+
+    const savePlayback = await request(app)
+      .post('/api/courses/ui-101/lessons/ui-101-l1/playback')
+      .set(authHeader)
+      .send({
+        positionSec: 87,
+        durationSec: 120,
+      })
+    expect(savePlayback.status).toBe(200)
+    expect(savePlayback.body.positionSec).toBe(87)
+    expect(savePlayback.body.progressPercent).toBeGreaterThan(0)
+
+    const detail = await request(app).get('/api/courses/ui-101').set(authHeader)
+    expect(detail.status).toBe(200)
+    expect(detail.body.activeLesson.playback.positionSec).toBe(87)
+  })
+
+  it('prevents skip-ahead cheating in playback progress tracking', async () => {
+    const login = await loginAs('indra@curiosity.app', 'admin123')
+    const authHeader = { Authorization: `Bearer ${login.body.token}` }
+
+    const jumpAhead = await request(app)
+      .post('/api/courses/ui-101/lessons/ui-101-l1/playback')
+      .set(authHeader)
+      .send({
+        positionSec: 115,
+        durationSec: 120,
+      })
+    expect(jumpAhead.status).toBe(200)
+    expect(jumpAhead.body.progressPercent).toBeLessThan(90)
+
+    const blockedComplete = await request(app).post('/api/courses/ui-101/lessons/ui-101-l1/complete').set(authHeader)
+    expect(blockedComplete.status).toBe(400)
+  })
+
+  it('locks next module until previous module quiz is passed', async () => {
+    const login = await loginAs('indra@curiosity.app', 'admin123')
+    const authHeader = { Authorization: `Bearer ${login.body.token}` }
+
+    const db = await readDb()
+    const course = db.courses.find((item) => item.id === 'ui-101')
+    course.modules.push({
+      id: 'ui-101-m2',
+      title: 'Advanced Layout',
+      lessons: [
+        {
+          id: 'ui-101-l5',
+          title: 'Advanced Layout Patterns',
+          duration: '13m',
+          type: 'video',
+          summary: 'Pattern layout untuk dashboard multi panel.',
+          resources: ['layout-patterns.txt'],
+        },
+      ],
+    })
+    await writeDb(db)
+
+    const completeWithPlaybackGate = async (lessonId, durationSec = 120) => {
+      const checkpoints = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.92].map((ratio) => Math.floor(durationSec * ratio))
+      for (const positionSec of checkpoints) {
+        const playback = await request(app)
+          .post(`/api/courses/ui-101/lessons/${lessonId}/playback`)
+          .set(authHeader)
+          .send({
+            positionSec,
+            durationSec,
+          })
+        expect(playback.status).toBe(200)
+      }
+      const complete = await request(app).post(`/api/courses/ui-101/lessons/${lessonId}/complete`).set(authHeader)
+      expect(complete.status).toBe(200)
+    }
+
+    await completeWithPlaybackGate('ui-101-l1')
+    await completeWithPlaybackGate('ui-101-l2')
+    await completeWithPlaybackGate('ui-101-l3')
+
+    const completeWorkshop = await request(app).post('/api/courses/ui-101/lessons/ui-101-l4/complete').set(authHeader)
+    expect(completeWorkshop.status).toBe(200)
+
+    const lockedCourse = await request(app).get('/api/courses/ui-101').set(authHeader)
+    expect(lockedCourse.status).toBe(200)
+    const lesson5Locked = lockedCourse.body.modules
+      .flatMap((module) => module.lessons)
+      .find((lesson) => lesson.id === 'ui-101-l5')
+    expect(lesson5Locked.isLocked).toBe(true)
+    expect(String(lesson5Locked.lockReason || '')).toMatch(/Pass|Lulus/i)
+
+    const dbAfterComplete = await readDb()
+    dbAfterComplete.quizAttempts = dbAfterComplete.quizAttempts || {}
+    const scoped = dbAfterComplete.quizAttempts['u-001'] || {}
+    scoped['ui-101-m1'] = [
+      {
+        id: 'attempt-pass-m1',
+        attemptNo: 1,
+        score: 100,
+        passed: true,
+        timedOut: false,
+        correctCount: 2,
+        total: 2,
+        submittedAt: '2026-03-09T00:00:00.000Z',
+        details: [],
+      },
+    ]
+    dbAfterComplete.quizAttempts['u-001'] = scoped
+    await writeDb(dbAfterComplete)
+
+    const unlockedCourse = await request(app).get('/api/courses/ui-101').set(authHeader)
+    expect(unlockedCourse.status).toBe(200)
+    const lesson5Unlocked = unlockedCourse.body.modules
+      .flatMap((module) => module.lessons)
+      .find((lesson) => lesson.id === 'ui-101-l5')
+    expect(lesson5Unlocked.isLocked).toBe(false)
+  })
+
+  it('supports configurable module prerequisite rules', async () => {
+    const login = await loginAs('indra@curiosity.app', 'admin123')
+    const authHeader = { Authorization: `Bearer ${login.body.token}` }
+
+    const db = await readDb()
+    const course = db.courses.find((item) => item.id === 'ui-101')
+    course.modules.push({
+      id: 'ui-101-m2',
+      title: 'Advanced Layout',
+      prerequisite: {
+        mode: 'any',
+        rules: [
+          { type: 'lesson-complete', lessonId: 'ui-101-l4' },
+          { type: 'module-quiz-pass', moduleId: 'ui-101-m1' },
+        ],
+      },
+      lessons: [
+        {
+          id: 'ui-101-l5',
+          title: 'Advanced Layout Patterns',
+          duration: '13m',
+          type: 'video',
+          summary: 'Pattern layout untuk dashboard multi panel.',
+          resources: ['layout-patterns.txt'],
+        },
+      ],
+    })
+    await writeDb(db)
+
+    const completeWithPlaybackGate = async (lessonId, durationSec = 120) => {
+      const checkpoints = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.92].map((ratio) => Math.floor(durationSec * ratio))
+      for (const positionSec of checkpoints) {
+        const playback = await request(app)
+          .post(`/api/courses/ui-101/lessons/${lessonId}/playback`)
+          .set(authHeader)
+          .send({
+            positionSec,
+            durationSec,
+          })
+        expect(playback.status).toBe(200)
+      }
+      const complete = await request(app).post(`/api/courses/ui-101/lessons/${lessonId}/complete`).set(authHeader)
+      expect(complete.status).toBe(200)
+    }
+
+    await completeWithPlaybackGate('ui-101-l1')
+    await completeWithPlaybackGate('ui-101-l2')
+    await completeWithPlaybackGate('ui-101-l3')
+    const completeWorkshop = await request(app).post('/api/courses/ui-101/lessons/ui-101-l4/complete').set(authHeader)
+    expect(completeWorkshop.status).toBe(200)
+
+    const detail = await request(app).get('/api/courses/ui-101').set(authHeader)
+    expect(detail.status).toBe(200)
+    const lesson5 = detail.body.modules.flatMap((module) => module.lessons).find((lesson) => lesson.id === 'ui-101-l5')
+    expect(lesson5.isLocked).toBe(false)
+  })
+
+  it('updates module prerequisite via API and restricts to reviewer roles', async () => {
+    const admin = await loginAs('indra@curiosity.app', 'admin123')
+    const adminAuth = { Authorization: `Bearer ${admin.body.token}` }
+
+    const db = await readDb()
+    const course = db.courses.find((item) => item.id === 'ui-101')
+    course.modules.push({
+      id: 'ui-101-m2',
+      title: 'Advanced Layout',
+      lessons: [
+        {
+          id: 'ui-101-l5',
+          title: 'Advanced Layout Patterns',
+          duration: '13m',
+          type: 'video',
+          summary: 'Pattern layout untuk dashboard multi panel.',
+          resources: ['layout-patterns.txt'],
+        },
+      ],
+    })
+    await writeDb(db)
+
+    const student = await loginAs('raka@curiosity.app', 'student123')
+    const forbidden = await request(app)
+      .patch('/api/courses/ui-101/modules/ui-101-m2/prerequisite')
+      .set('Authorization', `Bearer ${student.body.token}`)
+      .send({
+        mode: 'any',
+        rules: [{ type: 'module-complete', moduleId: 'ui-101-m1' }],
+      })
+    expect(forbidden.status).toBe(403)
+
+    const updated = await request(app)
+      .patch('/api/courses/ui-101/modules/ui-101-m2/prerequisite')
+      .set(adminAuth)
+      .send({
+        mode: 'any',
+        rules: [
+          { type: 'module-complete', moduleId: 'ui-101-m1' },
+          { type: 'lesson-complete', lessonId: 'ui-101-l4' },
+        ],
+      })
+    expect(updated.status).toBe(200)
+    const module2 = updated.body.modules.find((item) => item.id === 'ui-101-m2')
+    expect(module2.prerequisite.mode).toBe('any')
+    expect(module2.prerequisite.rules).toEqual([
+      { type: 'module-complete', moduleId: 'ui-101-m1' },
+      { type: 'lesson-complete', lessonId: 'ui-101-l4' },
+    ])
+  })
+
+  it('returns learning analytics summary', async () => {
+    const login = await loginAs('indra@curiosity.app', 'admin123')
+    const authHeader = { Authorization: `Bearer ${login.body.token}` }
+
+    await request(app)
+      .post('/api/courses/ui-101/lessons/ui-101-l1/playback')
+      .set(authHeader)
+      .send({
+        positionSec: 12,
+        durationSec: 120,
+      })
+    await request(app)
+      .post('/api/courses/ui-101/lessons/ui-101-l1/playback')
+      .set(authHeader)
+      .send({
+        positionSec: 24,
+        durationSec: 120,
+      })
+
+    const analytics = await request(app).get('/api/analytics/learning').set(authHeader)
+    expect(analytics.status).toBe(200)
+    expect(typeof analytics.body.completionRateAvg).toBe('number')
+    expect(typeof analytics.body.weeklyStudy?.totalMinutes).toBe('number')
+    expect(Array.isArray(analytics.body.courses)).toBe(true)
+    expect(Array.isArray(analytics.body.weeklyStudy?.byDay)).toBe(true)
+  })
+
+  it('returns global continue learning based on most recent touched course', async () => {
+    const login = await loginAs('indra@curiosity.app', 'admin123')
+    const authHeader = { Authorization: `Bearer ${login.body.token}` }
+
+    await request(app).post('/api/courses/ui-101/lessons/ui-101-l1/select').set(authHeader)
+    await request(app).post('/api/courses/fe-101/lessons/fe-101-l1/select').set(authHeader)
+
+    const res = await request(app).get('/api/courses/continue').set(authHeader)
+    expect(res.status).toBe(200)
+    expect(res.body.id).toBe('fe-101')
+    expect(typeof res.body.activeLessonId).toBe('string')
+  })
+
+  it('supports lesson notes CRUD by authenticated user', async () => {
+    const login = await loginAs('indra@curiosity.app', 'admin123')
+    const authHeader = { Authorization: `Bearer ${login.body.token}` }
+
+    const created = await request(app)
+      .post('/api/courses/ui-101/lessons/ui-101-l1/notes')
+      .set(authHeader)
+      .send({
+        timestampSec: 42,
+        note: 'Gunakan kontras tinggi untuk CTA utama.',
+      })
+    expect(created.status).toBe(201)
+    expect(Array.isArray(created.body)).toBe(true)
+    expect(created.body.length).toBe(1)
+    const noteId = created.body[0].id
+
+    const listed = await request(app).get('/api/courses/ui-101/lessons/ui-101-l1/notes').set(authHeader)
+    expect(listed.status).toBe(200)
+    expect(listed.body[0].timestampSec).toBe(42)
+
+    const updated = await request(app)
+      .patch(`/api/courses/ui-101/lessons/ui-101-l1/notes/${noteId}`)
+      .set(authHeader)
+      .send({
+        note: 'Kontras CTA harus konsisten di semua breakpoints.',
+      })
+    expect(updated.status).toBe(200)
+    expect(updated.body[0].note).toMatch(/breakpoints/i)
+
+    const removed = await request(app)
+      .delete(`/api/courses/ui-101/lessons/ui-101-l1/notes/${noteId}`)
+      .set(authHeader)
+    expect(removed.status).toBe(200)
+    expect(removed.body.length).toBe(0)
   })
 
   it('covers course endpoint edge cases and audit limit fallback', async () => {
@@ -844,6 +1171,243 @@ describe('Curiosity API integration', () => {
       .set('Authorization', `Bearer ${login.body.token}`)
 
     expect(audit.status).toBe(403)
+  })
+
+  it('supports submission and instructor review workflow', async () => {
+    const studentLogin = await loginAs('raka@curiosity.app', 'student123')
+    expect(studentLogin.status).toBe(200)
+
+    const submission = await request(app)
+      .post('/api/courses/ui-101/lessons/ui-101-l1/submission')
+      .set('Authorization', `Bearer ${studentLogin.body.token}`)
+      .send({
+        linkUrl: 'https://example.com/project/ui-101-l1',
+        notes: 'Initial delivery for review',
+      })
+    expect(submission.status).toBe(201)
+    expect(submission.body.status).toBe('submitted')
+
+    const instructorLogin = await loginAs('ayu@curiosity.app', 'instructor123')
+    expect(instructorLogin.status).toBe(200)
+
+    const assignment = await request(app)
+      .get('/api/courses/ui-101/lessons/ui-101-l1/assignment')
+      .set('Authorization', `Bearer ${instructorLogin.body.token}`)
+    expect(assignment.status).toBe(200)
+    expect(Array.isArray(assignment.body.submissions)).toBe(true)
+    expect(assignment.body.submissions.length).toBeGreaterThan(0)
+
+    const review = await request(app)
+      .patch(`/api/courses/ui-101/lessons/ui-101-l1/submissions/${submission.body.id}/review`)
+      .set('Authorization', `Bearer ${instructorLogin.body.token}`)
+      .send({
+        status: 'graded',
+        feedback: 'Good progress, improve spacing consistency.',
+        rubricScores: [
+          { criterionId: 'problem-understanding', score: 33, comment: 'Context sudah kuat.' },
+          { criterionId: 'execution-quality', score: 31, comment: 'Spacing masih perlu dirapikan.' },
+          { criterionId: 'communication', score: 18, comment: 'Penjelasan cukup jelas.' },
+        ],
+      })
+
+    expect(review.status).toBe(200)
+    expect(review.body.status).toBe('graded')
+    expect(review.body.scorePercent).toBe(82)
+    expect(review.body.rubricScores[0].comment).toMatch(/Context/i)
+
+    const resubmit = await request(app)
+      .post('/api/courses/ui-101/lessons/ui-101-l1/submission')
+      .set('Authorization', `Bearer ${studentLogin.body.token}`)
+      .send({
+        linkUrl: 'https://example.com/project/ui-101-l1-v2',
+        notes: 'Revision v2 after feedback',
+      })
+
+    expect(resubmit.status).toBe(200)
+    expect(Array.isArray(resubmit.body.history)).toBe(true)
+    expect(resubmit.body.history.length).toBeGreaterThan(0)
+    expect(resubmit.body.history[0].action).toBe('resubmitted')
+    expect(resubmit.body.history[0].previousSnapshot?.status).toBe('submitted')
+  })
+
+  it('uploads attachment and reuses attachmentId in assignment submission', async () => {
+    const studentLogin = await loginAs('raka@curiosity.app', 'student123')
+    expect(studentLogin.status).toBe(200)
+
+    const upload = await request(app)
+      .post('/api/uploads')
+      .set('Authorization', `Bearer ${studentLogin.body.token}`)
+      .send({
+        fileName: 'notes.txt',
+        dataUrl: 'data:text/plain;base64,SGVsbG8gQ3VyaW9zaXR5',
+        purpose: 'assignment',
+      })
+
+    expect(upload.status).toBe(201)
+    expect(upload.body.id).toMatch(/^upl-/)
+
+    const submit = await request(app)
+      .post('/api/courses/ui-101/lessons/ui-101-l1/submission')
+      .set('Authorization', `Bearer ${studentLogin.body.token}`)
+      .send({
+        notes: 'Upload reference attached',
+        attachmentId: upload.body.id,
+      })
+
+    expect([200, 201]).toContain(submit.status)
+    expect(submit.body.attachmentId).toBe(upload.body.id)
+    expect(submit.body.attachmentDataUrl).toBe('')
+
+    const fetchData = await request(app)
+      .get(`/api/uploads/${upload.body.id}/data`)
+      .set('Authorization', `Bearer ${studentLogin.body.token}`)
+
+    expect(fetchData.status).toBe(200)
+    expect(fetchData.body.dataUrl).toMatch(/^data:text\/plain;base64,/)
+
+    const signedUrl = await request(app)
+      .get(`/api/uploads/${upload.body.id}/url`)
+      .set('Authorization', `Bearer ${studentLogin.body.token}`)
+    expect(signedUrl.status).toBe(200)
+    expect(signedUrl.body.requiresAuth).toBe(true)
+  })
+
+  it('rejects upload when mime signature does not match extension/content', async () => {
+    const studentLogin = await loginAs('raka@curiosity.app', 'student123')
+    expect(studentLogin.status).toBe(200)
+
+    const invalidUpload = await request(app)
+      .post('/api/uploads')
+      .set('Authorization', `Bearer ${studentLogin.body.token}`)
+      .send({
+        fileName: 'fake.png',
+        dataUrl: 'data:image/png;base64,SGVsbG8gV29ybGQ=',
+        purpose: 'assignment',
+      })
+
+    expect(invalidUpload.status).toBe(400)
+    expect(invalidUpload.body.message).toMatch(/signature|compatible|unsupported/i)
+  })
+
+  it('rejects upload when user quota exceeded', async () => {
+    const db = await readDb()
+    db.uploads['upl-seed-quota'] = {
+      id: 'upl-seed-quota',
+      fileName: 'seed.bin',
+      safeName: 'seed.bin',
+      storageName: 'upl-seed-quota-seed.bin',
+      mimeType: 'application/zip',
+      sizeBytes: 20 * 1024 * 1024,
+      ownerId: 'u-003',
+      purpose: 'assignment',
+      uploadedAt: new Date().toISOString(),
+    }
+    await writeDb(db)
+
+    const studentLogin = await loginAs('raka@curiosity.app', 'student123')
+    expect(studentLogin.status).toBe(200)
+
+    const upload = await request(app)
+      .post('/api/uploads')
+      .set('Authorization', `Bearer ${studentLogin.body.token}`)
+      .send({
+        fileName: 'notes.txt',
+        dataUrl: 'data:text/plain;base64,SGVsbG8=',
+        purpose: 'assignment',
+      })
+
+    expect(upload.status).toBe(400)
+    expect(upload.body.message).toMatch(/quota/i)
+  })
+
+  it('enforces assignment deadline policy (late and closed)', async () => {
+    const db = await readDb()
+    const course = db.courses.find((item) => item.id === 'ui-101')
+    const lesson = course.modules.flatMap((module) => module.lessons).find((item) => item.id === 'ui-101-l1')
+    lesson.assignment = {
+      dueAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+      graceMinutes: 30,
+    }
+    await writeDb(db)
+
+    const studentLogin = await loginAs('raka@curiosity.app', 'student123')
+    expect(studentLogin.status).toBe(200)
+
+    const lateSubmit = await request(app)
+      .post('/api/courses/ui-101/lessons/ui-101-l1/submission')
+      .set('Authorization', `Bearer ${studentLogin.body.token}`)
+      .send({
+        notes: 'Submitting in late window',
+      })
+    expect([200, 201]).toContain(lateSubmit.status)
+    expect(lateSubmit.body.submissionMode).toBe('late')
+
+    const dbClosed = await readDb()
+    const courseClosed = dbClosed.courses.find((item) => item.id === 'ui-101')
+    const lessonClosed = courseClosed.modules.flatMap((module) => module.lessons).find((item) => item.id === 'ui-101-l1')
+    lessonClosed.assignment = {
+      dueAt: new Date(Date.now() - 90 * 60 * 1000).toISOString(),
+      graceMinutes: 30,
+    }
+    await writeDb(dbClosed)
+
+    const closedSubmit = await request(app)
+      .post('/api/courses/ui-101/lessons/ui-101-l1/submission')
+      .set('Authorization', `Bearer ${studentLogin.body.token}`)
+      .send({
+        notes: 'Trying after close',
+      })
+    expect(closedSubmit.status).toBe(403)
+    expect(closedSubmit.body.message).toMatch(/closed/i)
+  })
+
+  it('allows instructor to update assignment deadline policy and blocks student', async () => {
+    const instructorLogin = await loginAs('ayu@curiosity.app', 'instructor123')
+    expect(instructorLogin.status).toBe(200)
+
+    const dueAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString()
+    const update = await request(app)
+      .patch('/api/courses/ui-101/lessons/ui-101-l1/assignment-config')
+      .set('Authorization', `Bearer ${instructorLogin.body.token}`)
+      .send({
+        dueAt,
+        graceMinutes: 45,
+      })
+
+    expect(update.status).toBe(200)
+    expect(update.body.assignment.dueAt).toBe(dueAt)
+    expect(update.body.assignment.graceMinutes).toBe(45)
+
+    const studentLogin = await loginAs('raka@curiosity.app', 'student123')
+    expect(studentLogin.status).toBe(200)
+    const forbidden = await request(app)
+      .patch('/api/courses/ui-101/lessons/ui-101-l1/assignment-config')
+      .set('Authorization', `Bearer ${studentLogin.body.token}`)
+      .send({
+        graceMinutes: 10,
+      })
+    expect(forbidden.status).toBe(403)
+  })
+
+  it('blocks student from reviewing submission', async () => {
+    const studentLogin = await loginAs('raka@curiosity.app', 'student123')
+    expect(studentLogin.status).toBe(200)
+
+    const submission = await request(app)
+      .post('/api/courses/ui-101/lessons/ui-101-l1/submission')
+      .set('Authorization', `Bearer ${studentLogin.body.token}`)
+      .send({
+        notes: 'Try review self',
+      })
+    expect([200, 201]).toContain(submission.status)
+
+    const forbidden = await request(app)
+      .patch(`/api/courses/ui-101/lessons/ui-101-l1/submissions/${submission.body.id}/review`)
+      .set('Authorization', `Bearer ${studentLogin.body.token}`)
+      .send({
+        status: 'graded',
+      })
+    expect(forbidden.status).toBe(403)
   })
 
   it('rate limits repeated failed login attempts from same ip', async () => {
