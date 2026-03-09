@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { app, createCorsOriginValidator, handleAppError, start } from './index.js'
+import bcrypt from 'bcryptjs'
+import { app, checkPasswordAndUpgrade, createCorsOriginValidator, handleAppError, start } from './index.js'
 
 describe('server helpers', () => {
   afterEach(() => {
@@ -27,6 +28,15 @@ describe('server helpers', () => {
     expect(denied).toHaveBeenCalledTimes(1)
     expect(denied.mock.calls[0][0]).toBeInstanceOf(Error)
     expect(denied.mock.calls[0][0].message).toContain('CORS origin denied')
+  })
+
+  it('allows requests without origin header', () => {
+    const validateOrigin = createCorsOriginValidator(['https://allowed.com'])
+    const callback = vi.fn()
+
+    validateOrigin(undefined, callback)
+
+    expect(callback).toHaveBeenCalledWith(null, true)
   })
 
   it('returns cors denied response for cors errors', () => {
@@ -66,5 +76,29 @@ describe('server helpers', () => {
     expect(listenSpy).toHaveBeenCalledTimes(1)
     expect(server).toBe(fakeServer)
     expect(logSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('upgrades plaintext credential hash on successful password check', async () => {
+    const db = { credentials: { 'indra@curiosity.app': 'admin123' } }
+    const matched = await checkPasswordAndUpgrade(db, 'indra@curiosity.app', 'admin123')
+
+    expect(matched).toBe(true)
+    expect(db.credentials['indra@curiosity.app']).toMatch(/^\$2[aby]\$/)
+  })
+
+  it('returns false for wrong plaintext password without upgrading hash', async () => {
+    const db = { credentials: { 'indra@curiosity.app': 'admin123' } }
+    const matched = await checkPasswordAndUpgrade(db, 'indra@curiosity.app', 'wrong')
+
+    expect(matched).toBe(false)
+    expect(db.credentials['indra@curiosity.app']).toBe('admin123')
+  })
+
+  it('validates bcrypt credentials', async () => {
+    const hash = await bcrypt.hash('admin123', 10)
+    const db = { credentials: { 'indra@curiosity.app': hash } }
+
+    const matched = await checkPasswordAndUpgrade(db, 'indra@curiosity.app', 'admin123')
+    expect(matched).toBe(true)
   })
 })

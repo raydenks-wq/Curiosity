@@ -35,7 +35,7 @@
 
         <button class="icon-btn" type="button" @click="togglePanel('notif')" aria-label="Notifications">
           🔔
-          <span class="badge-dot"></span>
+          <span v-if="notificationStore.unreadCount" class="badge-dot">{{ notificationStore.unreadCount > 9 ? '9+' : notificationStore.unreadCount }}</span>
         </button>
 
         <button class="avatar-btn" type="button" @click="togglePanel('profile')" aria-label="Profile menu">
@@ -65,12 +65,35 @@
 
     <transition name="drop-fade">
       <div v-if="activePanel === 'notif'" class="panel panel-notif">
-        <p class="panel-title">Notifications</p>
-        <ul>
-          <li><strong>Quiz deadline:</strong> UI Dasar due besok 09:00</li>
-          <li><strong>Mentor reply:</strong> Feedback untuk tugas wireframe tersedia</li>
-          <li><strong>New class:</strong> Motion Design Fundamentals sudah dibuka</li>
+        <div class="panel-title-row">
+          <p class="panel-title">Notifications</p>
+          <div class="panel-title-actions">
+            <span v-if="notificationStore.mentionUnreadCount" class="mention-counter">
+              {{ notificationStore.mentionUnreadCount }} mention
+            </span>
+            <button type="button" class="ghost-btn panel-action-btn" @click="markAllRead">Mark all read</button>
+          </div>
+        </div>
+        <p v-if="notificationStore.isLoading" class="muted">Memuat notifikasi...</p>
+        <ul v-else-if="notificationStore.items.length" class="notif-list">
+          <li v-for="item in notificationStore.items" :key="item.id">
+            <RouterLink
+              class="notif-item"
+              :class="{ mention: item.isMention }"
+              :to="{
+                name: 'course-detail',
+                params: { id: item.courseId },
+                query: { lesson: item.lessonId, tab: 'discussion', focusDiscussion: item.id },
+              }"
+              @click="activePanel = null"
+            >
+              <strong>{{ item.authorName }} <span v-if="item.isMention" class="notif-mention-tag">@mention</span></strong>
+              <span>{{ item.message }}</span>
+              <small>{{ formatNotificationTime(item.createdAt) }}</small>
+            </RouterLink>
+          </li>
         </ul>
+        <p v-else class="muted">Belum ada notifikasi baru.</p>
       </div>
     </transition>
 
@@ -92,6 +115,7 @@ import { storeToRefs } from 'pinia'
 import { useRoute, useRouter } from 'vue-router'
 import { useTemplateSwitcher } from '../plugins/templateSwitcher'
 import { useAuthStore } from '../stores/auth'
+import { useNotificationStore } from '../stores/notification'
 import { useProfileStore } from '../stores/profile'
 import { useToastStore } from '../stores/toast'
 
@@ -99,6 +123,7 @@ const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const profileStore = useProfileStore()
+const notificationStore = useNotificationStore()
 const toastStore = useToastStore()
 const { profile } = storeToRefs(profileStore)
 const topnavRoot = ref(null)
@@ -114,6 +139,7 @@ const navLabels = [
   { label: 'Profile', to: '/profile' },
 ]
 
+const instructorNav = [{ label: 'Quiz Admin', to: '/quiz-admin' }]
 const adminOnlyNav = [{ label: 'Users', to: '/users' }]
 
 const iconMap = {
@@ -123,8 +149,12 @@ const iconMap = {
 
 const navItems = computed(() => {
   const icons = iconMap[currentTemplate.value] ?? iconMap.sunrise
-  const labels =
-    profile.value?.accessRole === 'admin' ? [...navLabels, ...adminOnlyNav] : [...navLabels]
+  const role = profile.value?.accessRole
+  const labels = [
+    ...navLabels,
+    ...(role === 'admin' || role === 'instructor' ? instructorNav : []),
+    ...(role === 'admin' ? adminOnlyNav : []),
+  ]
   return labels.map((item, index) => ({
     ...item,
     icon: icons[index] ?? '•',
@@ -145,6 +175,9 @@ const initials = computed(() => {
 
 const togglePanel = (panel) => {
   activePanel.value = activePanel.value === panel ? null : panel
+  if (activePanel.value === 'notif') {
+    notificationStore.load()
+  }
 }
 
 const selectTemplate = (id) => {
@@ -159,6 +192,7 @@ const goToProfileSection = (tab) => {
 
 const signOut = async () => {
   await authStore.logout()
+  notificationStore.clear()
   activePanel.value = null
   isMenuOpen.value = false
   toastStore.push({
@@ -167,6 +201,23 @@ const signOut = async () => {
     message: 'Kamu berhasil keluar dari sesi.',
   })
   router.replace({ name: 'login' })
+}
+
+const formatNotificationTime = (value) => {
+  try {
+    return new Intl.DateTimeFormat('id-ID', {
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(new Date(value))
+  } catch {
+    return '-'
+  }
+}
+
+const markAllRead = () => {
+  notificationStore.markAllRead()
 }
 
 const onClickOutside = (event) => {
@@ -186,6 +237,7 @@ watch(
 
 onMounted(() => {
   profileStore.load()
+  notificationStore.load()
   document.addEventListener('click', onClickOutside)
 })
 

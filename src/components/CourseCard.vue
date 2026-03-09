@@ -7,6 +7,10 @@
     <div class="course-body">
       <h3>{{ course.title }}</h3>
       <p>{{ course.description }}</p>
+      <p class="course-mini-meta">
+        {{ course.activeLessonTitle || 'Mulai lesson pertama' }} · {{ course.completedLessons || 0 }}/{{ course.totalLessons || 0 }}
+        lesson
+      </p>
 
       <div class="progress-row">
         <div class="progress-track">
@@ -15,16 +19,24 @@
         <strong>{{ course.progress }}%</strong>
       </div>
 
-      <RouterLink :to="`/courses/${course.id}`" class="primary-btn">Lanjutkan</RouterLink>
+      <RouterLink :to="courseRoute" class="primary-btn">Lanjutkan</RouterLink>
     </div>
   </article>
 </template>
 
 <script setup>
-defineProps({
+import { computed } from 'vue'
+
+const props = defineProps({
   course: {
     type: Object,
     required: true,
   },
 })
+
+const courseRoute = computed(() => ({
+  name: 'course-detail',
+  params: { id: props.course.id },
+  query: props.course.activeLessonId ? { lesson: props.course.activeLessonId } : {},
+}))
 </script>

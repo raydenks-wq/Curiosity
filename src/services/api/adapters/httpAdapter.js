@@ -172,6 +172,118 @@ export const httpAdapter = {
         auth: true,
       }),
   },
+  notifications: {
+    list: (limit = 30) =>
+      httpClient.request(`/notifications?limit=${encodeURIComponent(limit)}`, {
+        auth: true,
+      }),
+  },
+  courses: {
+    listCourses: () =>
+      httpClient.request('/courses', {
+        auth: true,
+      }),
+    getCourse: (courseId) =>
+      httpClient.request(`/courses/${encodeURIComponent(courseId)}`, {
+        auth: true,
+      }),
+    setActiveLesson: (courseId, lessonId) =>
+      httpClient.request(`/courses/${encodeURIComponent(courseId)}/lessons/${encodeURIComponent(lessonId)}/select`, {
+        method: 'POST',
+        auth: true,
+      }),
+    completeLesson: (courseId, lessonId) =>
+      httpClient.request(`/courses/${encodeURIComponent(courseId)}/lessons/${encodeURIComponent(lessonId)}/complete`, {
+        method: 'POST',
+        auth: true,
+      }),
+    listDiscussion: (courseId, lessonId) =>
+      httpClient.request(`/courses/${encodeURIComponent(courseId)}/lessons/${encodeURIComponent(lessonId)}/discussions`, {
+        auth: true,
+      }),
+    addDiscussion: (courseId, lessonId, payload) =>
+      httpClient.request(`/courses/${encodeURIComponent(courseId)}/lessons/${encodeURIComponent(lessonId)}/discussions`, {
+        method: 'POST',
+        auth: true,
+        body: payload,
+      }),
+    updateDiscussion: (courseId, lessonId, discussionId, payload) =>
+      httpClient.request(
+        `/courses/${encodeURIComponent(courseId)}/lessons/${encodeURIComponent(lessonId)}/discussions/${encodeURIComponent(discussionId)}`,
+        {
+          method: 'PATCH',
+          auth: true,
+          body: payload,
+        },
+      ),
+    deleteDiscussion: (courseId, lessonId, discussionId) =>
+      httpClient.request(
+        `/courses/${encodeURIComponent(courseId)}/lessons/${encodeURIComponent(lessonId)}/discussions/${encodeURIComponent(discussionId)}`,
+        {
+          method: 'DELETE',
+          auth: true,
+        },
+      ),
+  },
+  quiz: {
+    list: () =>
+      httpClient.request('/quizzes', {
+        auth: true,
+      }),
+    getEditor: (quizId) =>
+      httpClient.request(`/quizzes/${encodeURIComponent(quizId)}/editor`, {
+        auth: true,
+      }),
+    save: (payload) =>
+      httpClient.request('/quizzes', {
+        method: 'POST',
+        auth: true,
+        body: payload,
+      }),
+    updateStatus: (quizId, status) =>
+      httpClient.request(`/quizzes/${encodeURIComponent(quizId)}/status`, {
+        method: 'PATCH',
+        auth: true,
+        body: { status },
+      }),
+    bulkUpdateStatus: (ids, status) =>
+      httpClient.request('/quizzes/bulk-status', {
+        method: 'POST',
+        auth: true,
+        body: { ids, status },
+      }),
+    bulkDelete: (ids) =>
+      httpClient.request('/quizzes/bulk-delete', {
+        method: 'POST',
+        auth: true,
+        body: { ids },
+      }),
+    remove: (quizId) =>
+      httpClient.request(`/quizzes/${encodeURIComponent(quizId)}`, {
+        method: 'DELETE',
+        auth: true,
+      }),
+    getMeta: (quizId) =>
+      httpClient.request(`/quizzes/${encodeURIComponent(quizId)}`, {
+        auth: true,
+      }),
+    getHistory: (quizId) =>
+      httpClient.request(`/quizzes/${encodeURIComponent(quizId)}/history`, {
+        auth: true,
+      }),
+    startSession: (quizId, payload = {}) =>
+      httpClient.request(`/quizzes/${encodeURIComponent(quizId)}/session`, {
+        method: 'POST',
+        auth: true,
+        body: payload,
+      }),
+    submit: (quizId, payload) =>
+      httpClient.request(`/quizzes/${encodeURIComponent(quizId)}/submit`, {
+        method: 'POST',
+        auth: true,
+        body: payload,
+      }),
+  },
   meta: {
     accessLevels,
     permissionLabels,

@@ -2,11 +2,14 @@
   <section v-if="currentTemplate === 'sunrise'" class="dashboard-grid">
     <article class="hero-card dashboard-hero">
       <p class="eyebrow">Continue Learning</p>
-      <h2>UX Research Essentials</h2>
-      <p class="hero-meta">Lesson 4 dari 8 - User interview framework</p>
+      <h2>{{ heroCourse.title }}</h2>
+      <p class="hero-meta">
+        {{ heroCourse.activeLessonTitle || 'Mulai lesson pertama' }} - {{ heroCourse.completedLessons }}/{{ heroCourse.totalLessons }}
+        selesai
+      </p>
       <TemplateHeroArt />
       <div class="hero-actions">
-        <RouterLink to="/courses/ui-101" class="primary-btn">Resume Class</RouterLink>
+        <RouterLink :to="toCourseRoute(heroCourse)" class="primary-btn">Resume Class</RouterLink>
         <button class="ghost-btn" type="button">Lihat Silabus</button>
       </div>
     </article>
@@ -27,7 +30,7 @@
     <article class="card full-width dashboard-courses">
       <div class="section-header">
         <h3>My Courses</h3>
-        <span class="muted">3 course aktif</span>
+        <span class="muted">{{ displayCourses.length }} course aktif</span>
       </div>
       <div class="course-grid">
         <CourseCard v-for="course in displayCourses" :key="course.id" :course="course" />
@@ -51,11 +54,14 @@
   <section v-else class="dashboard-alt aurora-layout">
     <article class="hero-card aurora-hero">
       <p class="eyebrow">Learning Command Center</p>
-      <h2>UX Research Essentials</h2>
-      <p class="hero-meta">Lesson 4 dari 8 - User interview framework</p>
+      <h2>{{ heroCourse.title }}</h2>
+      <p class="hero-meta">
+        {{ heroCourse.activeLessonTitle || 'Mulai lesson pertama' }} - {{ heroCourse.completedLessons }}/{{ heroCourse.totalLessons }}
+        selesai
+      </p>
       <TemplateHeroArt />
       <div class="hero-actions">
-        <RouterLink to="/courses/ui-101" class="primary-btn">Resume Class</RouterLink>
+        <RouterLink :to="toCourseRoute(heroCourse)" class="primary-btn">Resume Class</RouterLink>
         <button class="ghost-btn" type="button">Open Study Plan</button>
       </div>
     </article>
@@ -86,13 +92,13 @@
     <article class="card aurora-courses">
       <div class="section-header">
         <h3>Course Pipeline</h3>
-        <span class="muted">3 aktif</span>
+        <span class="muted">{{ displayCourses.length }} aktif</span>
       </div>
       <div class="course-strip">
         <RouterLink
           v-for="course in displayCourses"
           :key="course.id"
-          :to="`/courses/${course.id}`"
+          :to="toCourseRoute(course)"
           class="course-strip-item"
         >
           <div class="strip-color" :style="{ background: course.gradient }"></div>
@@ -108,53 +114,48 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import CourseCard from '../components/CourseCard.vue'
 import TemplateDashboardWidget from '../components/template/TemplateDashboardWidget.vue'
 import TemplateHeroArt from '../components/template/TemplateHeroArt.vue'
 import { useTemplateSwitcher } from '../plugins/templateSwitcher'
+import { useCoursePlayerStore } from '../stores/coursePlayer'
 
 const { currentTemplate } = useTemplateSwitcher()
-
-const courses = [
-  {
-    id: 'ui-101',
-    title: 'UI Design Fundamentals',
-    description: 'Dasar komposisi, warna, tipografi, dan hierarchy.',
-    progress: 68,
-    tag: 'Design',
-    gradient: 'linear-gradient(120deg, #0081a7, #00afb9)',
-  },
-  {
-    id: 'fe-101',
-    title: 'Frontend for Designer',
-    description: 'HTML, CSS, dan Vue komponen untuk prototyping.',
-    progress: 42,
-    tag: 'Code',
-    gradient: 'linear-gradient(120deg, #fb8500, #ffb703)',
-  },
-  {
-    id: 'pm-101',
-    title: 'Product Thinking',
-    description: 'Menyusun roadmap fitur berbasis kebutuhan user.',
-    progress: 83,
-    tag: 'Product',
-    gradient: 'linear-gradient(120deg, #8338ec, #3a86ff)',
-  },
-]
+const coursePlayerStore = useCoursePlayerStore()
+const { courses } = storeToRefs(coursePlayerStore)
 
 const weeklyProgress = ref(0)
 const weeklyGain = ref(0)
-const animatedCourseProgress = ref(courses.map(() => 0))
+const animatedCourseProgress = ref([])
 const frameIds = new Set()
 const timeoutIds = []
 
 const displayCourses = computed(() =>
-  courses.map((course, index) => ({
+  courses.value.map((course, index) => ({
     ...course,
     progress: animatedCourseProgress.value[index] ?? 0,
   })),
 )
+
+const heroCourse = computed(() => {
+  if (displayCourses.value.length) return displayCourses.value[0]
+  return {
+    id: 'ui-101',
+    title: 'UI Design Fundamentals',
+    activeLessonId: 'ui-101-l1',
+    activeLessonTitle: 'Mulai lesson pertama',
+    completedLessons: 0,
+    totalLessons: 4,
+  }
+})
+
+const toCourseRoute = (course) => ({
+  name: 'course-detail',
+  params: { id: course.id },
+  query: course.activeLessonId ? { lesson: course.activeLessonId } : {},
+})
 
 const runNumberAnimation = (from, to, duration, onUpdate) => {
   const start = performance.now()
@@ -176,7 +177,21 @@ const runNumberAnimation = (from, to, duration, onUpdate) => {
   frameIds.add(first)
 }
 
-onMounted(() => {
+const animateCourses = () => {
+  animatedCourseProgress.value = courses.value.map(() => 0)
+  courses.value.forEach((course, index) => {
+    const timeoutId = setTimeout(() => {
+      runNumberAnimation(0, course.progress, 900 + index * 120, (value) => {
+        animatedCourseProgress.value[index] = value
+      })
+    }, 100 * index)
+    timeoutIds.push(timeoutId)
+  })
+}
+
+onMounted(async () => {
+  await coursePlayerStore.loadCourses()
+
   runNumberAnimation(0, 74, 1100, (value) => {
     weeklyProgress.value = value
   })
@@ -185,15 +200,17 @@ onMounted(() => {
     weeklyGain.value = value
   })
 
-  courses.forEach((course, index) => {
-    const timeoutId = setTimeout(() => {
-      runNumberAnimation(0, course.progress, 1000 + index * 150, (value) => {
-        animatedCourseProgress.value[index] = value
-      })
-    }, 120 * index)
-    timeoutIds.push(timeoutId)
-  })
+  animateCourses()
 })
+
+watch(
+  () => courses.value.length,
+  () => {
+    timeoutIds.forEach((id) => clearTimeout(id))
+    timeoutIds.length = 0
+    animateCourses()
+  },
+)
 
 onBeforeUnmount(() => {
   timeoutIds.forEach((id) => clearTimeout(id))

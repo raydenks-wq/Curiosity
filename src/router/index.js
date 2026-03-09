@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import DashboardView from '../views/DashboardView.vue'
 import CourseDetailView from '../views/CourseDetailView.vue'
 import QuizView from '../views/QuizView.vue'
+import QuizManagementView from '../views/QuizManagementView.vue'
 import ProfileView from '../views/ProfileView.vue'
 import UserManagementView from '../views/UserManagementView.vue'
 import LoginView from '../views/LoginView.vue'
@@ -29,6 +30,12 @@ const router = createRouter({
       name: 'quiz',
       component: QuizView,
       meta: { requiresAuth: true },
+    },
+    {
+      path: '/quiz-admin',
+      name: 'quiz-admin',
+      component: QuizManagementView,
+      meta: { requiresAuth: true, roles: ['admin', 'instructor'] },
     },
     {
       path: '/profile',

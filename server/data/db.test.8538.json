@@ -1,0 +1,415 @@
+{
+  "users": [
+    {
+      "id": "u-001",
+      "name": "Indra Permana",
+      "email": "indra@curiosity.app",
+      "role": "admin",
+      "status": "active",
+      "lastLogin": "2026-03-09 08:20"
+    },
+    {
+      "id": "u-002",
+      "name": "Ayu Pratama",
+      "email": "ayu@curiosity.app",
+      "role": "instructor",
+      "status": "active",
+      "lastLogin": "2026-03-08 21:17"
+    },
+    {
+      "id": "u-003",
+      "name": "Raka Wijaya",
+      "email": "raka@curiosity.app",
+      "role": "student",
+      "status": "active",
+      "lastLogin": "2026-03-08 19:44"
+    },
+    {
+      "id": "u-004",
+      "name": "Nadia Putri",
+      "email": "nadia@curiosity.app",
+      "role": "student",
+      "status": "suspended",
+      "lastLogin": "2026-03-03 11:08"
+    }
+  ],
+  "credentials": {
+    "indra@curiosity.app": "$2b$10$iGGhO2fwGFzUlCM1JWgM0OeVTjcPabSzjo6C5HZvOp9HZgUELstie",
+    "ayu@curiosity.app": "$2b$10$nMY4u8XOLcqu3NnZUUyhSO5KZ05yY9gHfFcCw9fN/Z88gwasBHOZ2",
+    "raka@curiosity.app": "$2b$10$ctxp1XwZdRwhMXX8urv41eh5o0jwXTDNjXyZhpCdRm4Pa5Q4yt1gm"
+  },
+  "permissionMatrix": {
+    "admin": {
+      "viewDashboard": true,
+      "manageCourse": true,
+      "manageQuiz": true,
+      "manageUsers": true
+    },
+    "instructor": {
+      "viewDashboard": true,
+      "manageCourse": true,
+      "manageQuiz": true,
+      "manageUsers": false
+    },
+    "student": {
+      "viewDashboard": true,
+      "manageCourse": false,
+      "manageQuiz": false,
+      "manageUsers": false
+    }
+  },
+  "courses": [
+    {
+      "id": "ui-101",
+      "title": "UI Design Fundamentals",
+      "description": "Dasar komposisi, warna, tipografi, dan hierarchy.",
+      "tag": "Design",
+      "gradient": "linear-gradient(120deg, #0081a7, #00afb9)",
+      "instructor": "Ayu Pratama",
+      "modules": [
+        {
+          "id": "ui-101-m1",
+          "title": "Foundations",
+          "lessons": [
+            {
+              "id": "ui-101-l1",
+              "title": "Intro to Visual Hierarchy",
+              "duration": "12m",
+              "type": "video",
+              "summary": "Memahami prinsip hierarchy untuk layout yang mudah dipahami.",
+              "resources": [
+                "Hierarchy Checklist.pdf",
+                "Reference Board.fig"
+              ]
+            },
+            {
+              "id": "ui-101-l2",
+              "title": "Typography Pairing",
+              "duration": "16m",
+              "type": "video",
+              "summary": "Kombinasi font headline-body untuk readability.",
+              "resources": [
+                "Type Scale Guide.pdf"
+              ]
+            },
+            {
+              "id": "ui-101-l3",
+              "title": "Color Contrast in UI",
+              "duration": "14m",
+              "type": "video",
+              "summary": "Praktik kontras warna agar aksesibel dan konsisten brand.",
+              "resources": [
+                "WCAG Contrast Card.pdf"
+              ]
+            },
+            {
+              "id": "ui-101-l4",
+              "title": "Grid and Spacing System",
+              "duration": "18m",
+              "type": "workshop",
+              "summary": "Membuat 8pt grid untuk desain yang rapi dan scalable.",
+              "resources": [
+                "8pt Grid Template.fig"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fe-101",
+      "title": "Frontend for Designer",
+      "description": "HTML, CSS, dan Vue komponen untuk prototyping.",
+      "tag": "Code",
+      "gradient": "linear-gradient(120deg, #fb8500, #ffb703)",
+      "instructor": "Rafi Nugraha",
+      "modules": [
+        {
+          "id": "fe-101-m1",
+          "title": "HTML/CSS Core",
+          "lessons": [
+            {
+              "id": "fe-101-l1",
+              "title": "Semantic HTML Basics",
+              "duration": "10m",
+              "type": "video",
+              "summary": "Struktur HTML yang benar untuk SEO dan aksesibilitas.",
+              "resources": [
+                "Semantic Tag Cheat Sheet.pdf"
+              ]
+            },
+            {
+              "id": "fe-101-l2",
+              "title": "Responsive Layout with CSS Grid",
+              "duration": "20m",
+              "type": "video",
+              "summary": "Membangun layout adaptif untuk desktop dan mobile.",
+              "resources": [
+                "Grid Playground.zip"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pm-101",
+      "title": "Product Thinking",
+      "description": "Menyusun roadmap fitur berbasis kebutuhan user.",
+      "tag": "Product",
+      "gradient": "linear-gradient(120deg, #8338ec, #3a86ff)",
+      "instructor": "Nadia Putri",
+      "modules": [
+        {
+          "id": "pm-101-m1",
+          "title": "Discovery",
+          "lessons": [
+            {
+              "id": "pm-101-l1",
+              "title": "Problem Framing",
+              "duration": "11m",
+              "type": "video",
+              "summary": "Teknik menyusun problem statement berbasis user impact.",
+              "resources": [
+                "Problem Framing Canvas.pdf"
+              ]
+            },
+            {
+              "id": "pm-101-l2",
+              "title": "Prioritization Matrix",
+              "duration": "15m",
+              "type": "workshop",
+              "summary": "Skoring impact vs effort untuk memilih prioritas fitur.",
+              "resources": [
+                "Prioritization Matrix.xlsx"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "courseProgress": {},
+  "discussions": {},
+  "profiles": {
+    "u-001": {
+      "profile": {
+        "name": "Indra Permana",
+        "email": "indra@curiosity.app",
+        "role": "Admin",
+        "accessRole": "admin",
+        "timezone": "Asia/Jakarta",
+        "avatarDataUrl": "",
+        "bio": "Belajar design systems dan frontend untuk membangun pengalaman belajar yang menarik."
+      },
+      "preferences": {
+        "deadlineNotif": true,
+        "discussionNotif": true,
+        "productUpdateNotif": false,
+        "language": "id",
+        "themeId": "aurora"
+      },
+      "stats": {
+        "streakDays": 12,
+        "coursesCompleted": 7,
+        "learningHours": 146
+      },
+      "certificates": [
+        {
+          "title": "UI Design Fundamentals",
+          "issuedAt": "12 Feb 2026"
+        },
+        {
+          "title": "UX Research Essentials",
+          "issuedAt": "18 Jan 2026"
+        }
+      ],
+      "badges": [
+        "Streak 12 Days",
+        "Quiz Master",
+        "Mentor Choice"
+      ],
+      "progressMetrics": [
+        {
+          "label": "Design Track",
+          "value": 78
+        },
+        {
+          "label": "Frontend Track",
+          "value": 62
+        },
+        {
+          "label": "Product Track",
+          "value": 83
+        }
+      ]
+    },
+    "u-002": {
+      "profile": {
+        "name": "Ayu Pratama",
+        "email": "ayu@curiosity.app",
+        "role": "Instructor",
+        "accessRole": "instructor",
+        "timezone": "Asia/Jakarta",
+        "avatarDataUrl": "",
+        "bio": "Belajar design systems dan frontend untuk membangun pengalaman belajar yang menarik."
+      },
+      "preferences": {
+        "deadlineNotif": true,
+        "discussionNotif": true,
+        "productUpdateNotif": false,
+        "language": "id",
+        "themeId": "aurora"
+      },
+      "stats": {
+        "streakDays": 12,
+        "coursesCompleted": 7,
+        "learningHours": 146
+      },
+      "certificates": [
+        {
+          "title": "UI Design Fundamentals",
+          "issuedAt": "12 Feb 2026"
+        },
+        {
+          "title": "UX Research Essentials",
+          "issuedAt": "18 Jan 2026"
+        }
+      ],
+      "badges": [
+        "Streak 12 Days",
+        "Quiz Master",
+        "Mentor Choice"
+      ],
+      "progressMetrics": [
+        {
+          "label": "Design Track",
+          "value": 78
+        },
+        {
+          "label": "Frontend Track",
+          "value": 62
+        },
+        {
+          "label": "Product Track",
+          "value": 83
+        }
+      ]
+    },
+    "u-003": {
+      "profile": {
+        "name": "Raka Wijaya",
+        "email": "raka@curiosity.app",
+        "role": "Student",
+        "accessRole": "student",
+        "timezone": "Asia/Jakarta",
+        "avatarDataUrl": "",
+        "bio": "Belajar design systems dan frontend untuk membangun pengalaman belajar yang menarik."
+      },
+      "preferences": {
+        "deadlineNotif": true,
+        "discussionNotif": true,
+        "productUpdateNotif": false,
+        "language": "id",
+        "themeId": "aurora"
+      },
+      "stats": {
+        "streakDays": 12,
+        "coursesCompleted": 7,
+        "learningHours": 146
+      },
+      "certificates": [
+        {
+          "title": "UI Design Fundamentals",
+          "issuedAt": "12 Feb 2026"
+        },
+        {
+          "title": "UX Research Essentials",
+          "issuedAt": "18 Jan 2026"
+        }
+      ],
+      "badges": [
+        "Streak 12 Days",
+        "Quiz Master",
+        "Mentor Choice"
+      ],
+      "progressMetrics": [
+        {
+          "label": "Design Track",
+          "value": 78
+        },
+        {
+          "label": "Frontend Track",
+          "value": 62
+        },
+        {
+          "label": "Product Track",
+          "value": 83
+        }
+      ]
+    },
+    "u-004": {
+      "profile": {
+        "name": "Nadia Putri",
+        "email": "nadia@curiosity.app",
+        "role": "Student",
+        "accessRole": "student",
+        "timezone": "Asia/Jakarta",
+        "avatarDataUrl": "",
+        "bio": "Belajar design systems dan frontend untuk membangun pengalaman belajar yang menarik."
+      },
+      "preferences": {
+        "deadlineNotif": true,
+        "discussionNotif": true,
+        "productUpdateNotif": false,
+        "language": "id",
+        "themeId": "aurora"
+      },
+      "stats": {
+        "streakDays": 12,
+        "coursesCompleted": 7,
+        "learningHours": 146
+      },
+      "certificates": [
+        {
+          "title": "UI Design Fundamentals",
+          "issuedAt": "12 Feb 2026"
+        },
+        {
+          "title": "UX Research Essentials",
+          "issuedAt": "18 Jan 2026"
+        }
+      ],
+      "badges": [
+        "Streak 12 Days",
+        "Quiz Master",
+        "Mentor Choice"
+      ],
+      "progressMetrics": [
+        {
+          "label": "Design Track",
+          "value": 78
+        },
+        {
+          "label": "Frontend Track",
+          "value": 62
+        },
+        {
+          "label": "Product Track",
+          "value": 83
+        }
+      ]
+    }
+  },
+  "revokedTokens": [],
+  "auditLogs": [
+    {
+      "id": "audit-nxsq64c",
+      "actor": "system",
+      "action": "seed_data",
+      "target": "bootstrap",
+      "detail": "Initial database seeded.",
+      "timestamp": "2026-03-09 11:28"
+    }
+  ]
+}

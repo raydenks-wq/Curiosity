@@ -79,6 +79,15 @@ Untuk mode backend:
    - `POST /users/bulk-status`
    - `POST /users/:id/toggle-status`
    - `POST /users/:id/reset-password`
+   - `GET /courses`
+   - `GET /courses/:id`
+   - `POST /courses/:id/lessons/:lessonId/select`
+   - `POST /courses/:id/lessons/:lessonId/complete`
+   - `GET /courses/:id/lessons/:lessonId/discussions`
+   - `POST /courses/:id/lessons/:lessonId/discussions`
+   - `PATCH /courses/:id/lessons/:lessonId/discussions/:discussionId`
+   - `DELETE /courses/:id/lessons/:lessonId/discussions/:discussionId`
+   - `GET /notifications?limit=30`
    - `GET /audit-logs?limit=100`
 
 Env backend yang didukung:
@@ -93,3 +102,18 @@ Catatan payload penting:
 
 - `POST /profile/password`
   - body: `{ "currentPassword": "string", "newPassword": "string" }`
+- Course player mendukung deep-link lesson:
+  - contoh: `/courses/ui-101?lesson=ui-101-l2`
+- Reply discussion per lesson:
+  - `POST /courses/:id/lessons/:lessonId/discussions`
+  - body minimal: `{ "message": "text" }`
+  - body reply: `{ "message": "text", "parentId": "disc-..." }`
+  - mention user: gunakan token seperti `@raka` atau `@indra` di `message`
+
+Quiz Engine (frontend V1):
+
+- randomisasi urutan soal dan opsi jawaban per attempt
+- timer per quiz dengan auto-submit saat waktu habis
+- auto-grade + passing score
+- retake policy dengan batas attempt
+- feedback per soal (jawaban user, jawaban benar, dan penjelasan)
