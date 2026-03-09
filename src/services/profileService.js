@@ -101,8 +101,19 @@ export const profileService = {
     return next
   },
 
-  async updatePassword() {
+  async updatePassword(payload = {}) {
     await delay(320)
+    const currentPassword = String(payload.currentPassword || '')
+    const newPassword = String(payload.newPassword || '')
+    if (currentPassword.length < 6) {
+      throw new Error('Current password tidak valid.')
+    }
+    if (newPassword.length < 8) {
+      throw new Error('Password baru minimal 8 karakter.')
+    }
+    if (currentPassword === newPassword) {
+      throw new Error('Password baru harus berbeda dari password lama.')
+    }
     return { ok: true }
   },
 

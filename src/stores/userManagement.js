@@ -1,15 +1,11 @@
 import { defineStore } from 'pinia'
-import {
-  accessLevels,
-  permissionLabels,
-  userAccountService,
-} from '../services/userAccountService'
+import { apiClient } from '../services/api/client'
 
 export const useUserManagementStore = defineStore('userManagement', {
   state: () => ({
     users: [],
-    accessLevels,
-    permissionLabels,
+    accessLevels: apiClient.meta.accessLevels,
+    permissionLabels: apiClient.meta.permissionLabels,
     permissionMatrix: {
       admin: {
         viewDashboard: true,
@@ -58,8 +54,8 @@ export const useUserManagementStore = defineStore('userManagement', {
       this.isLoading = true
       try {
         const [users, permissionMatrix] = await Promise.all([
-          userAccountService.loadUsers(),
-          userAccountService.loadPermissionMatrix(),
+          apiClient.users.loadUsers(),
+          apiClient.users.loadPermissionMatrix(),
         ])
         this.users = users
         this.permissionMatrix = permissionMatrix
@@ -70,13 +66,13 @@ export const useUserManagementStore = defineStore('userManagement', {
     },
 
     async savePermissionMatrix() {
-      this.permissionMatrix = await userAccountService.savePermissionMatrix(this.permissionMatrix)
+      this.permissionMatrix = await apiClient.users.savePermissionMatrix(this.permissionMatrix)
     },
 
     async saveUser(payload) {
       this.isSaving = true
       try {
-        this.users = await userAccountService.saveUser(payload)
+        this.users = await apiClient.users.saveUser(payload)
       } finally {
         this.isSaving = false
       }
@@ -85,30 +81,30 @@ export const useUserManagementStore = defineStore('userManagement', {
     async inviteUser(payload) {
       this.isSaving = true
       try {
-        this.users = await userAccountService.inviteUser(payload)
+        this.users = await apiClient.users.inviteUser(payload)
       } finally {
         this.isSaving = false
       }
     },
 
     async deleteUser(id) {
-      this.users = await userAccountService.deleteUser(id)
+      this.users = await apiClient.users.deleteUser(id)
     },
 
     async deleteUsers(ids) {
-      this.users = await userAccountService.deleteUsers(ids)
+      this.users = await apiClient.users.deleteUsers(ids)
     },
 
     async bulkUpdateStatus(ids, status) {
-      this.users = await userAccountService.bulkUpdateStatus(ids, status)
+      this.users = await apiClient.users.bulkUpdateStatus(ids, status)
     },
 
     async toggleStatus(id) {
-      this.users = await userAccountService.toggleStatus(id)
+      this.users = await apiClient.users.toggleStatus(id)
     },
 
     async resetPassword(id) {
-      this.users = await userAccountService.resetPassword(id)
+      this.users = await apiClient.users.resetPassword(id)
     },
   },
 })

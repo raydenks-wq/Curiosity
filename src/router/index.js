@@ -4,6 +4,8 @@ import CourseDetailView from '../views/CourseDetailView.vue'
 import QuizView from '../views/QuizView.vue'
 import ProfileView from '../views/ProfileView.vue'
 import UserManagementView from '../views/UserManagementView.vue'
+import LoginView from '../views/LoginView.vue'
+import { useAuthStore } from '../stores/auth'
 import { useProfileStore } from '../stores/profile'
 import { useToastStore } from '../stores/toast'
 
@@ -14,45 +16,71 @@ const router = createRouter({
       path: '/',
       name: 'dashboard',
       component: DashboardView,
+      meta: { requiresAuth: true },
     },
     {
       path: '/courses/:id',
       name: 'course-detail',
       component: CourseDetailView,
+      meta: { requiresAuth: true },
     },
     {
       path: '/quiz/:id',
       name: 'quiz',
       component: QuizView,
+      meta: { requiresAuth: true },
     },
     {
       path: '/profile',
       name: 'profile',
       component: ProfileView,
+      meta: { requiresAuth: true },
     },
     {
       path: '/users',
       name: 'users',
       component: UserManagementView,
+      meta: { requiresAuth: true, roles: ['admin'] },
+    },
+    {
+      path: '/login',
+      name: 'login',
+      component: LoginView,
     },
   ],
 })
 
 router.beforeEach(async (to) => {
-  if (to.name !== 'users') return true
-
+  const authStore = useAuthStore()
   const profileStore = useProfileStore()
   const toastStore = useToastStore()
-  await profileStore.load()
 
-  if (profileStore.profile.accessRole === 'admin') {
+  await authStore.restoreSession()
+
+  if (to.name === 'login' && authStore.isAuthenticated) {
+    return { name: 'dashboard' }
+  }
+
+  if (to.meta.requiresAuth && !authStore.isAuthenticated) {
+    return { name: 'login', query: { redirect: to.fullPath } }
+  }
+
+  if (!to.meta.requiresAuth) {
+    return true
+  }
+
+  await profileStore.load()
+  profileStore.syncFromAuthUser(authStore.user)
+
+  const requiredRoles = Array.isArray(to.meta.roles) ? to.meta.roles : []
+  if (!requiredRoles.length || requiredRoles.includes(authStore.role)) {
     return true
   }
 
   toastStore.push({
     type: 'error',
     title: 'Access Denied',
-    message: 'Halaman User Management hanya untuk Admin.',
+    message: 'Kamu tidak punya akses ke halaman ini.',
   })
 
   return { name: 'dashboard' }

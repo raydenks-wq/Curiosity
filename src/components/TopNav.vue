@@ -39,7 +39,7 @@
         </button>
 
         <button class="avatar-btn" type="button" @click="togglePanel('profile')" aria-label="Profile menu">
-          IP
+          {{ initials }}
         </button>
       </div>
     </div>
@@ -80,7 +80,7 @@
         <button type="button" @click="goToProfileSection('overview')">My Profile</button>
         <button type="button" @click="goToProfileSection('certificates')">Certificates</button>
         <button type="button" @click="goToProfileSection('security')">Settings</button>
-        <button type="button" class="danger">Sign Out</button>
+        <button type="button" class="danger" @click="signOut">Sign Out</button>
       </div>
     </transition>
   </header>
@@ -91,11 +91,15 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRoute, useRouter } from 'vue-router'
 import { useTemplateSwitcher } from '../plugins/templateSwitcher'
+import { useAuthStore } from '../stores/auth'
 import { useProfileStore } from '../stores/profile'
+import { useToastStore } from '../stores/toast'
 
 const route = useRoute()
 const router = useRouter()
+const authStore = useAuthStore()
 const profileStore = useProfileStore()
+const toastStore = useToastStore()
 const { profile } = storeToRefs(profileStore)
 const topnavRoot = ref(null)
 const isMenuOpen = ref(false)
@@ -127,6 +131,18 @@ const navItems = computed(() => {
   }))
 })
 
+const initials = computed(() => {
+  const words = String(profile.value?.name || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+  if (!words.length) return 'CU'
+  return words
+    .slice(0, 2)
+    .map((word) => word[0].toUpperCase())
+    .join('')
+})
+
 const togglePanel = (panel) => {
   activePanel.value = activePanel.value === panel ? null : panel
 }
@@ -139,6 +155,18 @@ const selectTemplate = (id) => {
 const goToProfileSection = (tab) => {
   router.push({ name: 'profile', query: { tab } })
   activePanel.value = null
+}
+
+const signOut = async () => {
+  await authStore.logout()
+  activePanel.value = null
+  isMenuOpen.value = false
+  toastStore.push({
+    type: 'info',
+    title: 'Signed Out',
+    message: 'Kamu berhasil keluar dari sesi.',
+  })
+  router.replace({ name: 'login' })
 }
 
 const onClickOutside = (event) => {

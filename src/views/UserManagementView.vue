@@ -152,14 +152,38 @@
     <article class="card full-width">
       <div class="section-header">
         <h3>Audit Log</h3>
+        <div class="table-actions">
+          <button class="ghost-btn" type="button" @click="refreshAuditLogs">Refresh</button>
+        </div>
+      </div>
+      <div class="audit-filter-row">
+        <input v-model="auditKeyword" class="search-input" type="search" placeholder="Search actor/target/detail..." />
+        <select v-model="auditActionFilter">
+          <option value="all">All Actions</option>
+          <option value="auth">Auth</option>
+          <option value="users">Users</option>
+          <option value="profile">Profile</option>
+          <option value="system">System</option>
+        </select>
+        <select v-model.number="auditLimit" @change="refreshAuditLogs">
+          <option :value="16">16 latest</option>
+          <option :value="40">40 latest</option>
+          <option :value="80">80 latest</option>
+        </select>
       </div>
       <div class="audit-list">
         <div class="audit-item" v-for="log in auditLogs" :key="log.id">
           <strong>{{ log.actor }}</strong>
-          <span>{{ log.action }} · {{ log.target }}</span>
+          <span class="audit-meta-row">
+            <span class="audit-chip" :class="`audit-chip-${actionMeta(log.action).tone}`">
+              {{ actionMeta(log.action).label }}
+            </span>
+            <span>{{ log.action }} · {{ log.target }}</span>
+          </span>
           <p class="muted">{{ log.detail }}</p>
           <small class="muted">{{ log.timestamp }}</small>
         </div>
+        <p v-if="!auditLogs.length" class="muted">Belum ada log untuk filter saat ini.</p>
       </div>
     </article>
 
@@ -232,12 +256,14 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
+import { useRouter } from 'vue-router'
 import { useToastStore } from '../stores/toast'
 import { useUserManagementStore } from '../stores/userManagement'
 import { useAuditLogStore } from '../stores/auditLog'
 import { useProfileStore } from '../stores/profile'
 
 const toastStore = useToastStore()
+const router = useRouter()
 const userStore = useUserManagementStore()
 const auditLogStore = useAuditLogStore()
 const profileStore = useProfileStore()
@@ -255,6 +281,9 @@ const sortDir = ref('asc')
 const page = ref(1)
 const pageSize = ref(10)
 const selectedIds = ref([])
+const auditKeyword = ref('')
+const auditActionFilter = ref('all')
+const auditLimit = ref(16)
 
 const isModalOpen = ref(false)
 const isInviteModalOpen = ref(false)
@@ -305,7 +334,29 @@ const isPageSelected = computed(() => {
   return paginatedUsers.value.every((user) => selectedIds.value.includes(user.id))
 })
 
-const auditLogs = computed(() => logs.value.slice(0, 16))
+const actionMeta = (action) => {
+  if (action.startsWith('auth_')) return { group: 'auth', label: 'Authentication', tone: 'auth' }
+  if (action.startsWith('users_') || action.includes('user')) return { group: 'users', label: 'User Management', tone: 'users' }
+  if (action.startsWith('profile_')) return { group: 'profile', label: 'Profile', tone: 'profile' }
+  return { group: 'system', label: 'System', tone: 'system' }
+}
+
+const auditLogs = computed(() => {
+  const key = auditKeyword.value.trim().toLowerCase()
+  return logs.value
+    .filter((log) => {
+      const meta = actionMeta(log.action)
+      const matchAction = auditActionFilter.value === 'all' || meta.group === auditActionFilter.value
+      const matchKeyword =
+        !key ||
+        String(log.actor || '').toLowerCase().includes(key) ||
+        String(log.target || '').toLowerCase().includes(key) ||
+        String(log.detail || '').toLowerCase().includes(key) ||
+        String(log.action || '').toLowerCase().includes(key)
+      return matchAction && matchKeyword
+    })
+    .slice(0, auditLimit.value)
+})
 
 const addAudit = (action, target, detail) => {
   auditLogStore.log({
@@ -314,6 +365,32 @@ const addAudit = (action, target, detail) => {
     target,
     detail,
   })
+}
+
+const refreshAuditLogs = async () => {
+  await auditLogStore.load({ force: true, limit: auditLimit.value })
+}
+
+const getErrorMessage = (error) => (error instanceof Error ? error.message : 'Terjadi kesalahan.')
+
+const runAdminAction = async (fn) => {
+  try {
+    await fn()
+    return true
+  } catch (error) {
+    toastStore.push({
+      type: 'error',
+      title: 'Action Failed',
+      message: getErrorMessage(error),
+    })
+
+    if (error instanceof Error && error.message.includes('Sesi login berakhir')) {
+      window.setTimeout(() => {
+        router.replace({ name: 'login' })
+      }, 200)
+    }
+    return false
+  }
 }
 
 const openCreateModal = () => {
@@ -353,13 +430,16 @@ const closeAllModal = () => {
 }
 
 const submitModal = async () => {
-  await userStore.saveUser({
-    id: editingId.value || undefined,
-    name: form.name,
-    email: form.email,
-    role: form.role,
-    status: form.status,
-  })
+  const isSuccess = await runAdminAction(() =>
+    userStore.saveUser({
+      id: editingId.value || undefined,
+      name: form.name,
+      email: form.email,
+      role: form.role,
+      status: form.status,
+    }),
+  )
+  if (!isSuccess) return
 
   addAudit(editingId.value ? 'update_user' : 'create_user', form.email, `${form.name} (${form.role}, ${form.status})`)
 
@@ -373,7 +453,8 @@ const submitModal = async () => {
 }
 
 const submitInvite = async () => {
-  await userStore.inviteUser({ ...inviteForm })
+  const isSuccess = await runAdminAction(() => userStore.inviteUser({ ...inviteForm }))
+  if (!isSuccess) return
   addAudit('invite_user', inviteForm.email, `${inviteForm.name} invited as ${inviteForm.role}`)
   toastStore.push({
     type: 'info',
@@ -385,7 +466,8 @@ const submitInvite = async () => {
 
 const toggleUserStatus = async (user) => {
   const nextStatus = user.status === 'active' ? 'suspended' : 'active'
-  await userStore.toggleStatus(user.id)
+  const isSuccess = await runAdminAction(() => userStore.toggleStatus(user.id))
+  if (!isSuccess) return
   addAudit('toggle_status', user.email, `${user.name} => ${nextStatus}`)
   toastStore.push({
     type: 'info',
@@ -395,7 +477,8 @@ const toggleUserStatus = async (user) => {
 }
 
 const resetPassword = async (user) => {
-  await userStore.resetPassword(user.id)
+  const isSuccess = await runAdminAction(() => userStore.resetPassword(user.id))
+  if (!isSuccess) return
   addAudit('reset_password', user.email, `Password reset requested for ${user.name}`)
   toastStore.push({
     type: 'info',
@@ -405,7 +488,8 @@ const resetPassword = async (user) => {
 }
 
 const deleteUser = async (user) => {
-  await userStore.deleteUser(user.id)
+  const isSuccess = await runAdminAction(() => userStore.deleteUser(user.id))
+  if (!isSuccess) return
   selectedIds.value = selectedIds.value.filter((id) => id !== user.id)
   addAudit('delete_user', user.email, `${user.name} deleted`)
   toastStore.push({
@@ -438,7 +522,8 @@ const togglePageSelection = () => {
 
 const runBulkStatus = async (status) => {
   if (!selectedIds.value.length) return
-  await userStore.bulkUpdateStatus(selectedIds.value, status)
+  const isSuccess = await runAdminAction(() => userStore.bulkUpdateStatus(selectedIds.value, status))
+  if (!isSuccess) return
   addAudit('bulk_status', `${selectedIds.value.length} users`, `Updated status to ${status}`)
   toastStore.push({
     type: 'info',
@@ -451,7 +536,8 @@ const runBulkStatus = async (status) => {
 const runBulkDelete = async () => {
   if (!selectedIds.value.length) return
   const count = selectedIds.value.length
-  await userStore.deleteUsers(selectedIds.value)
+  const isSuccess = await runAdminAction(() => userStore.deleteUsers(selectedIds.value))
+  if (!isSuccess) return
   addAudit('bulk_delete', `${count} users`, `${count} users deleted from platform`)
   toastStore.push({
     type: 'error',
@@ -462,7 +548,8 @@ const runBulkDelete = async () => {
 }
 
 const savePermissionMatrix = async () => {
-  await userStore.savePermissionMatrix()
+  const isSuccess = await runAdminAction(() => userStore.savePermissionMatrix())
+  if (!isSuccess) return
   addAudit('update_permission_matrix', 'roles', 'Permission matrix updated')
   toastStore.push({
     type: 'success',
@@ -491,7 +578,10 @@ watch(totalPages, (next) => {
 })
 
 onMounted(async () => {
-  await Promise.all([userStore.load(), profileStore.load()])
-  auditLogStore.load()
+  await Promise.all([
+    runAdminAction(() => userStore.load()),
+    profileStore.load(),
+  ])
+  await auditLogStore.load({ limit: auditLimit.value })
 })
 </script>

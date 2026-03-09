@@ -5,16 +5,30 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "server": "node server/index.js",
+    "server:dev": "node --watch server/index.js",
+    "test:server": "vitest run server",
+    "test:server:coverage": "vitest run server --coverage --coverage.reporter=text --coverage.reporter=lcov --coverage.reportsDirectory=coverage/server --coverage.thresholds.lines=90 --coverage.thresholds.functions=85 --coverage.thresholds.statements=90 --coverage.thresholds.branches=75",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.3.0",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.3",
     "pinia": "^3.0.4",
     "vue": "^3.5.25",
-    "vue-router": "^4.6.4"
+    "vue-router": "^4.6.4",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.2",
-    "vite": "^7.3.1"
+    "@vitest/coverage-v8": "^4.0.18",
+    "supertest": "^7.2.2",
+    "vite": "^7.3.1",
+    "vitest": "^4.0.18"
   }
 }

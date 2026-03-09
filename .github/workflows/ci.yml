@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [18, 20]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify lockfile is clean
+        run: npm ls --depth=0
+
+      - name: Run server integration tests
+        if: matrix.node-version != 20
+        run: npm run test:server
+
+      - name: Run server integration tests with coverage
+        if: matrix.node-version == 20
+        run: npm run test:server:coverage
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Upload server coverage artifact
+        if: matrix.node-version == 20
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-server
+          path: coverage/server

@@ -240,10 +240,9 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRoute } from 'vue-router'
 import { useTemplateSwitcher } from '../plugins/templateSwitcher'
+import { apiClient } from '../services/api/client'
 import { useProfileStore } from '../stores/profile'
 import { useToastStore } from '../stores/toast'
-import { getDefaultProfileState } from '../services/profileService'
-import { accessLevels } from '../services/userAccountService'
 
 const route = useRoute()
 const { templateOptions, currentTemplate, setTemplate } = useTemplateSwitcher()
@@ -304,7 +303,8 @@ const securitySaved = ref(false)
 const securityError = ref('')
 const isResetConfirmOpen = ref(false)
 const lastSnapshot = ref(null)
-const defaultState = getDefaultProfileState()
+const defaultState = apiClient.profile.getDefaultState()
+const accessLevels = apiClient.meta.accessLevels
 const isAvatarModalOpen = ref(false)
 const avatarSourceDataUrl = ref('')
 const cropPreviewDataUrl = ref('')
@@ -500,7 +500,10 @@ const saveSecurity = async () => {
     return
   }
 
-  await profileStore.updatePassword()
+  await profileStore.updatePassword({
+    currentPassword: security.currentPassword,
+    newPassword: security.newPassword,
+  })
   triggerSaved(securitySaved)
   security.currentPassword = ''
   security.newPassword = ''

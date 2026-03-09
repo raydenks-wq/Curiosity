@@ -1,9 +1,9 @@
 import { defineStore } from 'pinia'
-import { getDefaultProfileState, profileService } from '../services/profileService'
+import { apiClient } from '../services/api/client'
 
 export const useProfileStore = defineStore('profile', {
   state: () => ({
-    ...getDefaultProfileState(),
+    ...apiClient.profile.getDefaultState(),
     isLoading: false,
     isSavingAccount: false,
     isSavingPreferences: false,
@@ -40,7 +40,7 @@ export const useProfileStore = defineStore('profile', {
 
       this.isLoading = true
       try {
-        const data = await profileService.loadProfile()
+        const data = await apiClient.profile.load()
         this.applyState(data)
         this.loaded = true
       } finally {
@@ -51,7 +51,7 @@ export const useProfileStore = defineStore('profile', {
     async saveAccount(payload) {
       this.isSavingAccount = true
       try {
-        const data = await profileService.saveAccount(payload)
+        const data = await apiClient.profile.saveAccount(payload)
         this.profile = data.profile
       } finally {
         this.isSavingAccount = false
@@ -61,17 +61,17 @@ export const useProfileStore = defineStore('profile', {
     async savePreferences(payload) {
       this.isSavingPreferences = true
       try {
-        const data = await profileService.savePreferences(payload)
+        const data = await apiClient.profile.savePreferences(payload)
         this.preferences = data.preferences
       } finally {
         this.isSavingPreferences = false
       }
     },
 
-    async updatePassword() {
+    async updatePassword(payload) {
       this.isUpdatingPassword = true
       try {
-        await profileService.updatePassword()
+        await apiClient.profile.updatePassword(payload)
       } finally {
         this.isUpdatingPassword = false
       }
@@ -80,7 +80,7 @@ export const useProfileStore = defineStore('profile', {
     async resetToDefault() {
       this.isResetting = true
       try {
-        const data = await profileService.resetProfile()
+        const data = await apiClient.profile.reset()
         this.applyState(data)
       } finally {
         this.isResetting = false
@@ -88,8 +88,19 @@ export const useProfileStore = defineStore('profile', {
     },
 
     async restoreSnapshot(snapshot) {
-      await profileService.saveFullState(snapshot)
+      await apiClient.profile.saveAll(snapshot)
       this.applyState(snapshot)
+    },
+
+    syncFromAuthUser(user) {
+      if (!user) return
+      this.profile = {
+        ...this.profile,
+        name: user.name || this.profile.name,
+        email: user.email || this.profile.email,
+        accessRole: user.role || this.profile.accessRole,
+        role: user.roleLabel || this.profile.role,
+      }
     },
   },
 })

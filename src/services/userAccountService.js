@@ -1,3 +1,5 @@
+import { authSession } from './authSession'
+
 const USER_STORAGE_KEY = 'curiosity:lms:user-management:v2'
 const PERMISSION_STORAGE_KEY = 'curiosity:lms:permission-matrix:v1'
 
@@ -134,25 +136,49 @@ const nowStamp = () => {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`
 }
 
+const ensureAdminAccess = () => {
+  const session = authSession.read()
+  if (!session || !session.expiresAt || session.expiresAt < Date.now()) {
+    const error = new Error('Sesi login berakhir. Silakan login kembali.')
+    error.code = 'AUTH_REQUIRED'
+    throw error
+  }
+
+  if (session.user?.role !== 'admin') {
+    const error = new Error('Aksi ini hanya dapat dilakukan oleh Admin.')
+    error.code = 'FORBIDDEN'
+    throw error
+  }
+}
+
 export const userAccountService = {
+  async loadUsersForAuth() {
+    await delay(80)
+    return readUsers()
+  },
+
   async loadUsers() {
     await delay(170)
+    ensureAdminAccess()
     return readUsers()
   },
 
   async loadPermissionMatrix() {
     await delay(100)
+    ensureAdminAccess()
     return readPermissionMatrix()
   },
 
   async savePermissionMatrix(matrix) {
     await delay(170)
+    ensureAdminAccess()
     writePermissionMatrix(matrix)
     return matrix
   },
 
   async saveUser(payload) {
     await delay(220)
+    ensureAdminAccess()
     const users = readUsers()
 
     if (payload.id) {
@@ -174,6 +200,7 @@ export const userAccountService = {
 
   async inviteUser(payload) {
     await delay(220)
+    ensureAdminAccess()
     const users = readUsers()
     const created = {
       id: `u-${Math.random().toString(36).slice(2, 8)}`,
@@ -191,6 +218,7 @@ export const userAccountService = {
 
   async deleteUser(id) {
     await delay(170)
+    ensureAdminAccess()
     const next = readUsers().filter((user) => user.id !== id)
     writeUsers(next)
     return next
@@ -198,6 +226,7 @@ export const userAccountService = {
 
   async deleteUsers(ids) {
     await delay(190)
+    ensureAdminAccess()
     const idSet = new Set(ids)
     const next = readUsers().filter((user) => !idSet.has(user.id))
     writeUsers(next)
@@ -206,6 +235,7 @@ export const userAccountService = {
 
   async bulkUpdateStatus(ids, status) {
     await delay(180)
+    ensureAdminAccess()
     const idSet = new Set(ids)
     const next = readUsers().map((user) =>
       idSet.has(user.id)
@@ -221,6 +251,7 @@ export const userAccountService = {
 
   async toggleStatus(id) {
     await delay(180)
+    ensureAdminAccess()
     const next = readUsers().map((user) => {
       if (user.id !== id) return user
       const nextStatus = user.status === 'active' ? 'suspended' : 'active'
@@ -235,6 +266,7 @@ export const userAccountService = {
 
   async resetPassword(id) {
     await delay(210)
+    ensureAdminAccess()
     const next = readUsers().map((user) => {
       if (user.id !== id) return user
       return {
