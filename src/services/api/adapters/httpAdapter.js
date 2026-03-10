@@ -321,6 +321,34 @@ export const httpAdapter = {
         auth: true,
       }),
   },
+  courseManagement: {
+    list: () =>
+      httpClient.request('/course-management', {
+        auth: true,
+      }),
+    save: (payload) =>
+      httpClient.request('/course-management', {
+        method: 'POST',
+        body: payload,
+        auth: true,
+      }),
+    remove: (courseId) =>
+      httpClient.request(`/course-management/${encodeURIComponent(courseId)}`, {
+        method: 'DELETE',
+        auth: true,
+      }),
+    duplicate: (courseId) =>
+      httpClient.request(`/course-management/${encodeURIComponent(courseId)}/duplicate`, {
+        method: 'POST',
+        auth: true,
+      }),
+    updateStatus: (courseId, status) =>
+      httpClient.request(`/course-management/${encodeURIComponent(courseId)}/status`, {
+        method: 'PATCH',
+        body: { status },
+        auth: true,
+      }),
+  },
   quiz: {
     list: () =>
       httpClient.request('/quizzes', {

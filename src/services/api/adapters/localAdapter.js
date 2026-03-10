@@ -9,6 +9,7 @@ import { accessLevels, permissionLabels, userAccountService } from '../../userAc
 
 const localQuizSessions = new Map()
 const LOCAL_QUIZ_BANK_KEY = 'curiosity:lms:quiz-bank:v1'
+const LOCAL_COURSE_MGMT_KEY = 'curiosity:lms:course-management:v1'
 const seedQuizIds = ['ui-101', 'ui-101-m1', 'fe-101-m1', 'pm-101-m1']
 
 const readJson = (key, fallback) => {
@@ -44,6 +45,15 @@ const readQuizBank = () => {
 
 const writeQuizBank = (quizzes) => {
   writeJson(LOCAL_QUIZ_BANK_KEY, quizzes)
+}
+
+const readManagedCourses = () => {
+  const value = readJson(LOCAL_COURSE_MGMT_KEY, [])
+  return Array.isArray(value) ? value : []
+}
+
+const writeManagedCourses = (courses) => {
+  writeJson(LOCAL_COURSE_MGMT_KEY, Array.isArray(courses) ? courses : [])
 }
 
 const quizMeta = (quiz) => ({
@@ -686,6 +696,77 @@ export const localAdapter = {
       Promise.resolve({
         url: '',
         requiresAuth: true,
+      }),
+  },
+  courseManagement: {
+    list: () => Promise.resolve(readManagedCourses()),
+    save: (payload) =>
+      Promise.resolve().then(() => {
+        const courses = readManagedCourses()
+        const id = String(payload?.id || `course-${Math.random().toString(36).slice(2, 8)}`)
+        const next = {
+          ...payload,
+          id,
+          updatedAt: payload?.updatedAt || new Date().toISOString(),
+          createdAt: payload?.createdAt || new Date().toISOString(),
+        }
+        const updated = courses.some((course) => course.id === id)
+          ? courses.map((course) => (course.id === id ? next : course))
+          : [next, ...courses]
+        writeManagedCourses(updated)
+        return next
+      }),
+    remove: (courseId) =>
+      Promise.resolve().then(() => {
+        const courses = readManagedCourses()
+        const next = courses.filter((course) => course.id !== courseId)
+        writeManagedCourses(next)
+        return next
+      }),
+    duplicate: (courseId) =>
+      Promise.resolve().then(() => {
+        const courses = readManagedCourses()
+        const source = courses.find((course) => course.id === courseId)
+        if (!source) {
+          const error = new Error('Course not found.')
+          error.code = 'NOT_FOUND'
+          throw error
+        }
+        const nowIso = new Date().toISOString()
+        const duplicated = {
+          ...source,
+          id: `course-${Math.random().toString(36).slice(2, 8)}`,
+          title: `${source.title || source.id} (Copy)`,
+          status: 'draft',
+          publishAt: '',
+          unpublishAt: '',
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        }
+        const next = [duplicated, ...courses]
+        writeManagedCourses(next)
+        return duplicated
+      }),
+    updateStatus: (courseId, status) =>
+      Promise.resolve().then(() => {
+        const courses = readManagedCourses()
+        const target = courses.find((course) => course.id === courseId)
+        if (!target) {
+          const error = new Error('Course not found.')
+          error.code = 'NOT_FOUND'
+          throw error
+        }
+        const next = courses.map((course) =>
+          course.id === courseId
+            ? {
+                ...course,
+                status,
+                updatedAt: new Date().toISOString(),
+              }
+            : course,
+        )
+        writeManagedCourses(next)
+        return next.find((course) => course.id === courseId)
       }),
   },
   quiz: {

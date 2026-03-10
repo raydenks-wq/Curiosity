@@ -878,6 +878,425 @@ a {
   margin: 0;
 }
 
+.course-mgmt-layout {
+  grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+}
+
+.course-mgmt-layout .quiz-admin-editor,
+.course-mgmt-layout .quiz-admin-list {
+  max-height: calc(100vh - 92px);
+  overflow: auto;
+}
+
+.course-mgmt-filter-row {
+  grid-template-columns: minmax(0, 1fr) 150px;
+}
+
+.course-mgmt-filter-row .quiz-input:nth-child(1) {
+  grid-column: 1 / -1;
+}
+
+.course-mgmt-pager {
+  margin-top: 0.55rem;
+}
+
+.course-mgmt-editor .quiz-editor-section {
+  margin-top: 0.6rem;
+}
+
+.cm-module-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.cm-module-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-soft);
+  padding: 0.62rem;
+  display: grid;
+  gap: 0.5rem;
+  cursor: grab;
+}
+
+.cm-module-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.cm-lesson-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.cm-lesson-row {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 0.5rem;
+  display: grid;
+  gap: 0.45rem;
+  cursor: grab;
+}
+
+.cm-module-card:active,
+.cm-lesson-row:active {
+  cursor: grabbing;
+}
+
+.cm-lesson-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.cm-lesson-toggle-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.cm-checklist {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.cm-checklist li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.86rem;
+}
+
+.cm-checklist li.pass {
+  color: #0f6a45;
+}
+
+.cm-checklist li.fail {
+  color: #8a2e2e;
+}
+
+.cm-asset-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.cm-asset-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 0.5rem 0.58rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.cm-asset-history {
+  margin: 0;
+  padding-left: 1rem;
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.cm-prerequisite-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.45rem;
+}
+
+.cm-prerequisite-chip {
+  font-size: 0.75rem;
+  padding: 0.32rem 0.6rem;
+}
+
+.cm-prerequisite-chip.active {
+  background: color-mix(in oklab, var(--primary) 18%, transparent);
+  border-color: color-mix(in oklab, var(--primary) 55%, transparent);
+  color: var(--text-strong);
+}
+
+.cm-dependency-info {
+  margin: 0.55rem 0 0;
+  padding-left: 1rem;
+  display: grid;
+  gap: 0.2rem;
+  font-size: 0.79rem;
+  color: var(--text-muted);
+}
+
+.cm-dependency-info .fail {
+  color: #8a2e2e;
+}
+
+.cm-dependency-info .pass {
+  color: #0f6a45;
+}
+
+.cm-dependency-graph-wrap {
+  margin-top: 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 0.35rem;
+  overflow-x: auto;
+}
+
+.cm-dependency-graph {
+  width: 100%;
+  min-width: 620px;
+  display: block;
+}
+
+.cm-dependency-edge {
+  stroke: color-mix(in oklab, var(--primary) 45%, var(--line));
+  stroke-width: 2;
+  opacity: 0.85;
+}
+
+.cm-dependency-edge.invalid {
+  stroke: #b24a4a;
+  stroke-dasharray: 5 4;
+}
+
+.cm-dependency-edge.dim {
+  opacity: 0.18;
+}
+
+.cm-dependency-node {
+  fill: var(--surface-soft);
+  stroke: var(--line);
+  cursor: pointer;
+  transition: transform 120ms ease, filter 120ms ease;
+}
+
+.cm-dependency-node:hover {
+  filter: brightness(0.98);
+}
+
+.cm-dependency-node.not-clickable {
+  cursor: default;
+}
+
+.cm-dependency-node.center {
+  fill: color-mix(in oklab, var(--primary) 16%, var(--surface-soft));
+}
+
+.cm-dependency-node.upstream {
+  fill: color-mix(in oklab, #7fb0f6 14%, var(--surface-soft));
+}
+
+.cm-dependency-node.downstream {
+  fill: color-mix(in oklab, #8cc8a3 14%, var(--surface-soft));
+}
+
+.cm-dependency-node.invalid {
+  stroke: #b24a4a;
+}
+
+.cm-dependency-node.cycle {
+  stroke: #d18f22;
+  stroke-width: 1.4;
+}
+
+.cm-dependency-node.selected {
+  stroke: color-mix(in oklab, var(--primary) 68%, #1750a2);
+  stroke-width: 1.6;
+}
+
+.cm-dependency-node.focused {
+  stroke-width: 2;
+}
+
+.cm-dependency-node.matched {
+  stroke-width: 1.8;
+}
+
+.cm-dependency-node.dim {
+  opacity: 0.28;
+}
+
+.cm-dependency-node-label {
+  font-size: 12px;
+  fill: var(--text-strong);
+  font-weight: 600;
+}
+
+.cm-dependency-legend {
+  margin-top: 0.45rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+}
+
+.cm-dependency-view-switch {
+  display: inline-flex;
+  gap: 0.35rem;
+  margin-right: 0.2rem;
+}
+
+.cm-dependency-view-switch .ghost-btn {
+  padding: 0.26rem 0.5rem;
+  font-size: 0.72rem;
+}
+
+.cm-dependency-view-switch .ghost-btn.active {
+  background: color-mix(in oklab, var(--primary) 16%, var(--surface-soft));
+  border-color: color-mix(in oklab, var(--primary) 55%, var(--line));
+  color: var(--text-strong);
+}
+
+.cm-dependency-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.cm-dependency-legend .swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  display: inline-block;
+}
+
+.cm-dependency-legend .swatch.upstream {
+  background: color-mix(in oklab, #7fb0f6 50%, var(--surface-soft));
+}
+
+.cm-dependency-legend .swatch.center {
+  background: color-mix(in oklab, var(--primary) 46%, var(--surface-soft));
+}
+
+.cm-dependency-legend .swatch.downstream {
+  background: color-mix(in oklab, #8cc8a3 55%, var(--surface-soft));
+}
+
+.cm-dependency-legend .swatch.selected {
+  background: color-mix(in oklab, var(--primary) 75%, #1953aa);
+}
+
+.cm-dependency-focus-panel {
+  margin-top: 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-soft);
+  padding: 0.5rem 0.58rem;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.cm-dependency-focus-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
+}
+
+.cm-dependency-search {
+  margin-top: 0.45rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.cm-dependency-search-result {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 0.35rem;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.cm-dependency-search-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.78rem;
+}
+
+.cm-dependency-search-item small {
+  color: var(--text-muted);
+}
+
+.cm-progress-modal {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 0.55rem;
+}
+
+.pill-danger {
+  background: #fff1f1;
+  color: #8a2e2e;
+}
+
+.course-preview-card {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-soft);
+  padding: 0.75rem;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.course-preview-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.65rem;
+}
+
+.course-preview-head h3 {
+  margin: 0.15rem 0 0.25rem;
+}
+
+.cm-preview-module-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.cm-preview-module {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 0.5rem 0.58rem;
+}
+
+.cm-preview-module strong {
+  display: block;
+  margin-bottom: 0.35rem;
+}
+
+.cm-preview-module ul {
+  margin: 0;
+  padding-left: 1rem;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.cm-preview-module li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  align-items: center;
+  font-size: 0.85rem;
+}
+
+.cm-preview-module li small {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+}
+
 .user-table {
   width: 100%;
   border-collapse: collapse;
