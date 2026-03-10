@@ -3,6 +3,7 @@ import { apiClient } from '../services/api/client'
 import { useAuthStore } from './auth'
 
 const PLAYBACK_QUEUE_KEY = 'curiosity:lms:playback-sync-queue:v1'
+const MAX_PLAYBACK_RETRY = 5
 
 const readQueue = () => {
   if (typeof localStorage === 'undefined') return []
@@ -21,6 +22,23 @@ const writeQueue = (items) => {
   localStorage.setItem(PLAYBACK_QUEUE_KEY, JSON.stringify(Array.isArray(items) ? items : []))
 }
 
+const mergePlaybackPayload = (current = {}, next = {}) => {
+  const currentPosition = Math.max(0, Math.floor(Number(current?.positionSec || 0)))
+  const nextPosition = Math.max(0, Math.floor(Number(next?.positionSec || 0)))
+  const currentDuration = Math.max(0, Math.floor(Number(current?.durationSec || 0)))
+  const nextDuration = Math.max(0, Math.floor(Number(next?.durationSec || 0)))
+  return {
+    positionSec: Math.max(currentPosition, nextPosition),
+    durationSec: Math.max(currentDuration, nextDuration),
+    markCompleted: Boolean(current?.markCompleted) || Boolean(next?.markCompleted),
+  }
+}
+
+const toRetryDelayMs = (attempts) => {
+  const safeAttempts = Math.max(1, Math.floor(Number(attempts || 1)))
+  return Math.min(60_000, 1_000 * 2 ** (safeAttempts - 1))
+}
+
 export const useCoursePlayerStore = defineStore('coursePlayer', {
   state: () => ({
     courses: [],
@@ -33,6 +51,7 @@ export const useCoursePlayerStore = defineStore('coursePlayer', {
 
   getters: {
     pendingPlaybackSyncCount: (state) => state.playbackSyncQueue.length,
+    failedPlaybackSyncCount: (state) => state.playbackSyncQueue.filter((item) => Number(item.attempts || 0) > 0).length,
   },
 
   actions: {
@@ -160,7 +179,36 @@ export const useCoursePlayerStore = defineStore('coursePlayer', {
     },
 
     enqueuePlaybackSync(item) {
-      this.playbackSyncQueue = [...this.playbackSyncQueue, item].slice(-400)
+      const normalized = {
+        id: item?.id || `pbq-${Math.random().toString(36).slice(2, 10)}`,
+        courseId: String(item?.courseId || ''),
+        lessonId: String(item?.lessonId || ''),
+        userScopeId: String(item?.userScopeId || 'guest'),
+        payload: mergePlaybackPayload({}, item?.payload || {}),
+        queuedAt: item?.queuedAt || new Date().toISOString(),
+        attempts: Math.max(0, Number(item?.attempts || 0)),
+        nextRetryAt: item?.nextRetryAt || null,
+        lastAttemptAt: item?.lastAttemptAt || null,
+        lastError: item?.lastError || '',
+      }
+      const nextQueue = [...this.playbackSyncQueue]
+      const existingIdx = nextQueue.findIndex(
+        (row) =>
+          row?.userScopeId === normalized.userScopeId &&
+          row?.courseId === normalized.courseId &&
+          row?.lessonId === normalized.lessonId,
+      )
+      if (existingIdx >= 0) {
+        const current = nextQueue[existingIdx]
+        nextQueue[existingIdx] = {
+          ...current,
+          payload: mergePlaybackPayload(current?.payload || {}, normalized.payload || {}),
+          queuedAt: current?.queuedAt || normalized.queuedAt,
+        }
+      } else {
+        nextQueue.push(normalized)
+      }
+      this.playbackSyncQueue = nextQueue.slice(-400)
       writeQueue(this.playbackSyncQueue)
     },
 
@@ -170,6 +218,10 @@ export const useCoursePlayerStore = defineStore('coursePlayer', {
       const queue = [...this.playbackSyncQueue]
       const retained = []
       let flushed = 0
+      let failed = 0
+      let dropped = 0
+      let skipped = 0
+      const nowMs = Date.now()
 
       for (const item of queue) {
         if (!item || item.userScopeId !== userScopeId) {
@@ -180,18 +232,36 @@ export const useCoursePlayerStore = defineStore('coursePlayer', {
           retained.push(item)
           continue
         }
+        const retryAtMs = Date.parse(item.nextRetryAt || '')
+        if (Number.isFinite(retryAtMs) && retryAtMs > nowMs) {
+          retained.push(item)
+          skipped += 1
+          continue
+        }
         try {
           const playback = await apiClient.courses.saveLessonPlayback(item.courseId, item.lessonId, item.payload, userScopeId)
           this.applyPlaybackToCourse(item.lessonId, playback)
           flushed += 1
-        } catch {
-          retained.push(item)
+        } catch (error) {
+          const attempts = Math.max(0, Number(item.attempts || 0)) + 1
+          if (attempts >= MAX_PLAYBACK_RETRY) {
+            dropped += 1
+            continue
+          }
+          failed += 1
+          retained.push({
+            ...item,
+            attempts,
+            lastAttemptAt: new Date().toISOString(),
+            nextRetryAt: new Date(Date.now() + toRetryDelayMs(attempts)).toISOString(),
+            lastError: error instanceof Error ? error.message : 'Playback sync failed.',
+          })
         }
       }
 
       this.playbackSyncQueue = retained
       writeQueue(this.playbackSyncQueue)
-      return { flushed, remaining: retained.length }
+      return { flushed, remaining: retained.length, failed, dropped, skipped }
     },
 
     upsertCourseCard(course) {

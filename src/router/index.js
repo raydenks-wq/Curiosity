@@ -3,6 +3,7 @@ import DashboardView from '../views/DashboardView.vue'
 import CourseDetailView from '../views/CourseDetailView.vue'
 import QuizView from '../views/QuizView.vue'
 import QuizManagementView from '../views/QuizManagementView.vue'
+import CourseManagementView from '../views/CourseManagementView.vue'
 import ProfileView from '../views/ProfileView.vue'
 import UserManagementView from '../views/UserManagementView.vue'
 import LoginView from '../views/LoginView.vue'
@@ -32,9 +33,16 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
-      path: '/quiz-admin',
+      path: '/management/quizzes',
       name: 'quiz-admin',
+      alias: ['/quiz-admin'],
       component: QuizManagementView,
+      meta: { requiresAuth: true, roles: ['admin', 'instructor'] },
+    },
+    {
+      path: '/management/courses',
+      name: 'course-management',
+      component: CourseManagementView,
       meta: { requiresAuth: true, roles: ['admin', 'instructor'] },
     },
     {
@@ -44,8 +52,9 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
-      path: '/users',
+      path: '/management/users',
       name: 'users',
+      alias: ['/users'],
       component: UserManagementView,
       meta: { requiresAuth: true, roles: ['admin'] },
     },

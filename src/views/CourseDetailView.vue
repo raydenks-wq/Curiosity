@@ -8,30 +8,67 @@
       </div>
 
       <div class="lesson-content">
-        <p v-if="pendingPlaybackSyncCount > 0" class="sync-queue-indicator">
+        <p v-if="pendingPlaybackSyncCount > 0" class="sync-queue-indicator" role="status" aria-live="polite">
           {{ pendingPlaybackSyncCount }} progress update menunggu sinkronisasi.
+          <span v-if="failedPlaybackSyncCount > 0"> ({{ failedPlaybackSyncCount }} retry)</span>
         </p>
-        <div class="tab-strip">
-          <button class="tab" :class="{ active: activeTab === 'material' }" type="button" @click="activeTab = 'material'">
+        <div class="tab-strip" role="tablist" aria-label="Lesson Sections">
+          <button
+            id="lesson-tab-material"
+            class="tab"
+            :class="{ active: activeTab === 'material' }"
+            type="button"
+            role="tab"
+            :aria-selected="activeTab === 'material'"
+            aria-controls="lesson-panel-material"
+            :tabindex="activeTab === 'material' ? 0 : -1"
+            @click="activeTab = 'material'"
+          >
             Materi
           </button>
-          <button class="tab" :class="{ active: activeTab === 'resources' }" type="button" @click="activeTab = 'resources'">
+          <button
+            id="lesson-tab-resources"
+            class="tab"
+            :class="{ active: activeTab === 'resources' }"
+            type="button"
+            role="tab"
+            :aria-selected="activeTab === 'resources'"
+            aria-controls="lesson-panel-resources"
+            :tabindex="activeTab === 'resources' ? 0 : -1"
+            @click="activeTab = 'resources'"
+          >
             Resources
           </button>
           <button
+            id="lesson-tab-discussion"
             class="tab"
             :class="{ active: activeTab === 'discussion' }"
             type="button"
+            role="tab"
+            :aria-selected="activeTab === 'discussion'"
+            aria-controls="lesson-panel-discussion"
+            :tabindex="activeTab === 'discussion' ? 0 : -1"
             @click="activeTab = 'discussion'"
           >
             Discussion
           </button>
-          <button class="tab" :class="{ active: activeTab === 'assignment' }" type="button" @click="activeTab = 'assignment'">
+          <button
+            id="lesson-tab-assignment"
+            class="tab"
+            :class="{ active: activeTab === 'assignment' }"
+            type="button"
+            role="tab"
+            :aria-selected="activeTab === 'assignment'"
+            aria-controls="lesson-panel-assignment"
+            :tabindex="activeTab === 'assignment' ? 0 : -1"
+            @click="activeTab = 'assignment'"
+          >
             Assignment
           </button>
         </div>
 
         <template v-if="activeTab === 'material'">
+          <div id="lesson-panel-material" role="tabpanel" aria-labelledby="lesson-tab-material">
           <p class="lesson-summary">{{ activeLesson?.summary || 'Menyiapkan konten lesson...' }}</p>
           <div v-if="activeLesson?.videoUrl" class="video-player-shell">
             <video
@@ -75,11 +112,11 @@
               <div class="lesson-note-form">
                 <label class="assignment-field">
                   <span>Timestamp</span>
-                  <input v-model.number="noteDraftTimestampSec" class="assignment-input" type="number" min="0" step="1" />
+                  <input v-model.number="noteDraftTimestampSec" class="assignment-input" type="number" min="0" step="1" aria-label="Note timestamp" />
                 </label>
                 <label class="assignment-field">
                   <span>Catatan</span>
-                  <textarea v-model="noteDraftText" class="assignment-input" rows="2" placeholder="Contoh: prinsip kontras untuk CTA"></textarea>
+                  <textarea v-model="noteDraftText" class="assignment-input" rows="2" placeholder="Contoh: prinsip kontras untuk CTA" aria-label="Note content"></textarea>
                 </label>
                 <div class="hero-actions">
                   <button class="ghost-btn" type="button" :disabled="!lessonVideoRef" @click="setNoteTimestampFromCurrent">Use Current Time</button>
@@ -108,7 +145,7 @@
                 <h4>Transcript</h4>
                 <span class="muted">{{ filteredTranscriptRows.length }} baris</span>
               </div>
-              <input v-model="transcriptQuery" class="assignment-input" type="search" placeholder="Cari kata di transcript..." />
+              <input v-model="transcriptQuery" class="assignment-input" type="search" placeholder="Cari kata di transcript..." aria-label="Search transcript" />
               <ul v-if="filteredTranscriptRows.length" class="transcript-list">
                 <li v-for="row in filteredTranscriptRows" :key="`sunrise-transcript-${row.id}`">
                   <button type="button" class="lesson-timestamp-btn" @click="seekToTimestamp(row.atSec)">{{ formatSeconds(row.atSec) }}</button>
@@ -118,9 +155,11 @@
               <p v-else class="muted">Transcript tidak ditemukan untuk kata kunci ini.</p>
             </section>
           </div>
+          </div>
         </template>
 
         <template v-else-if="activeTab === 'resources'">
+          <div id="lesson-panel-resources" role="tabpanel" aria-labelledby="lesson-tab-resources">
           <p class="lesson-summary">Resources untuk lesson ini.</p>
           <div class="lesson-resource-list">
             <article v-for="resource in activeLessonResources" :key="resource.id" class="lesson-resource-item">
@@ -133,9 +172,11 @@
               </button>
             </article>
           </div>
+          </div>
         </template>
 
         <template v-else-if="activeTab === 'discussion'">
+          <div id="lesson-panel-discussion" role="tabpanel" aria-labelledby="lesson-tab-discussion">
           <div class="discussion-composer">
             <p v-if="replyTarget" class="reply-indicator">
               Membalas {{ replyTarget.authorName }}
@@ -229,9 +270,11 @@
             </li>
           </ul>
           <p v-else class="muted">Belum ada diskusi di lesson ini.</p>
+          </div>
         </template>
 
         <template v-else>
+          <div id="lesson-panel-assignment" role="tabpanel" aria-labelledby="lesson-tab-assignment">
           <div class="assignment-card">
             <div class="assignment-header">
               <div>
@@ -506,6 +549,7 @@
             </article>
             <p v-if="!filteredAssignmentItems.length" class="muted">Belum ada submission pada filter ini.</p>
           </div>
+          </div>
         </template>
       </div>
     </article>
@@ -660,23 +704,67 @@
         <span v-for="resource in activeLessonResources" :key="resource.id" class="resource-chip">{{ resource.title }}</span>
       </div>
 
-      <div class="tab-strip">
-        <p v-if="pendingPlaybackSyncCount > 0" class="sync-queue-indicator">
+      <div class="tab-strip" role="tablist" aria-label="Lesson Sections">
+        <p v-if="pendingPlaybackSyncCount > 0" class="sync-queue-indicator" role="status" aria-live="polite">
           {{ pendingPlaybackSyncCount }} progress update menunggu sinkronisasi.
+          <span v-if="failedPlaybackSyncCount > 0"> ({{ failedPlaybackSyncCount }} retry)</span>
         </p>
-        <button class="tab" :class="{ active: activeTab === 'material' }" type="button" @click="activeTab = 'material'">Materi</button>
-        <button class="tab" :class="{ active: activeTab === 'resources' }" type="button" @click="activeTab = 'resources'">
+        <button
+          id="lesson-tab-material"
+          class="tab"
+          :class="{ active: activeTab === 'material' }"
+          type="button"
+          role="tab"
+          :aria-selected="activeTab === 'material'"
+          aria-controls="lesson-panel-material"
+          :tabindex="activeTab === 'material' ? 0 : -1"
+          @click="activeTab = 'material'"
+        >
+          Materi
+        </button>
+        <button
+          id="lesson-tab-resources"
+          class="tab"
+          :class="{ active: activeTab === 'resources' }"
+          type="button"
+          role="tab"
+          :aria-selected="activeTab === 'resources'"
+          aria-controls="lesson-panel-resources"
+          :tabindex="activeTab === 'resources' ? 0 : -1"
+          @click="activeTab = 'resources'"
+        >
           Resources
         </button>
-        <button class="tab" :class="{ active: activeTab === 'discussion' }" type="button" @click="activeTab = 'discussion'">
+        <button
+          id="lesson-tab-discussion"
+          class="tab"
+          :class="{ active: activeTab === 'discussion' }"
+          type="button"
+          role="tab"
+          :aria-selected="activeTab === 'discussion'"
+          aria-controls="lesson-panel-discussion"
+          :tabindex="activeTab === 'discussion' ? 0 : -1"
+          @click="activeTab = 'discussion'"
+        >
           Discussion
         </button>
-        <button class="tab" :class="{ active: activeTab === 'assignment' }" type="button" @click="activeTab = 'assignment'">
+        <button
+          id="lesson-tab-assignment"
+          class="tab"
+          :class="{ active: activeTab === 'assignment' }"
+          type="button"
+          role="tab"
+          :aria-selected="activeTab === 'assignment'"
+          aria-controls="lesson-panel-assignment"
+          :tabindex="activeTab === 'assignment' ? 0 : -1"
+          @click="activeTab = 'assignment'"
+        >
           Assignment
         </button>
       </div>
 
       <template v-if="activeTab === 'material'">
+        <div id="lesson-panel-material" role="tabpanel" aria-labelledby="lesson-tab-material">
         <div v-if="activeLesson?.videoUrl" class="video-player-shell">
           <video
             ref="lessonVideoRef"
@@ -719,11 +807,11 @@
             <div class="lesson-note-form">
               <label class="assignment-field">
                 <span>Timestamp</span>
-                <input v-model.number="noteDraftTimestampSec" class="assignment-input" type="number" min="0" step="1" />
+                <input v-model.number="noteDraftTimestampSec" class="assignment-input" type="number" min="0" step="1" aria-label="Note timestamp" />
               </label>
               <label class="assignment-field">
                 <span>Catatan</span>
-                <textarea v-model="noteDraftText" class="assignment-input" rows="2" placeholder="Contoh: prinsip kontras untuk CTA"></textarea>
+                <textarea v-model="noteDraftText" class="assignment-input" rows="2" placeholder="Contoh: prinsip kontras untuk CTA" aria-label="Note content"></textarea>
               </label>
               <div class="hero-actions">
                 <button class="ghost-btn" type="button" :disabled="!lessonVideoRef" @click="setNoteTimestampFromCurrent">Use Current Time</button>
@@ -752,7 +840,7 @@
               <h4>Transcript</h4>
               <span class="muted">{{ filteredTranscriptRows.length }} baris</span>
             </div>
-            <input v-model="transcriptQuery" class="assignment-input" type="search" placeholder="Cari kata di transcript..." />
+            <input v-model="transcriptQuery" class="assignment-input" type="search" placeholder="Cari kata di transcript..." aria-label="Search transcript" />
             <ul v-if="filteredTranscriptRows.length" class="transcript-list">
               <li v-for="row in filteredTranscriptRows" :key="`aurora-transcript-${row.id}`">
                 <button type="button" class="lesson-timestamp-btn" @click="seekToTimestamp(row.atSec)">{{ formatSeconds(row.atSec) }}</button>
@@ -762,9 +850,11 @@
             <p v-else class="muted">Transcript tidak ditemukan untuk kata kunci ini.</p>
           </section>
         </div>
+        </div>
       </template>
 
       <template v-else-if="activeTab === 'resources'">
+        <div id="lesson-panel-resources" role="tabpanel" aria-labelledby="lesson-tab-resources">
         <p class="lesson-summary">Resources untuk lesson ini bisa kamu gunakan sebagai referensi tugas.</p>
         <div class="lesson-resource-list">
           <article v-for="resource in activeLessonResources" :key="resource.id" class="lesson-resource-item">
@@ -777,9 +867,11 @@
             </button>
           </article>
         </div>
+        </div>
       </template>
 
       <template v-else-if="activeTab === 'discussion'">
+        <div id="lesson-panel-discussion" role="tabpanel" aria-labelledby="lesson-tab-discussion">
         <div class="discussion-composer">
           <p v-if="replyTarget" class="reply-indicator">
             Membalas {{ replyTarget.authorName }}
@@ -873,9 +965,11 @@
           </li>
         </ul>
         <p v-else class="muted">Belum ada diskusi di lesson ini.</p>
+        </div>
       </template>
 
       <template v-else>
+        <div id="lesson-panel-assignment" role="tabpanel" aria-labelledby="lesson-tab-assignment">
         <div class="assignment-card">
           <div class="assignment-header">
             <div>
@@ -1150,6 +1244,7 @@
           </article>
           <p v-if="!filteredAssignmentItems.length" class="muted">Belum ada submission pada filter ini.</p>
         </div>
+        </div>
       </template>
     </article>
 
@@ -1382,7 +1477,7 @@ const coursePlayerStore = useCoursePlayerStore()
 const discussionStore = useLessonDiscussionStore()
 const assignmentStore = useLessonAssignmentStore()
 const notesStore = useLessonNotesStore()
-const { currentCourse, pendingPlaybackSyncCount } = storeToRefs(coursePlayerStore)
+const { currentCourse, pendingPlaybackSyncCount, failedPlaybackSyncCount } = storeToRefs(coursePlayerStore)
 const { items: discussionItems } = storeToRefs(discussionStore)
 const { items: lessonNotes } = storeToRefs(notesStore)
 const {
@@ -2733,6 +2828,13 @@ const flushPlaybackQueueWithNotice = async () => {
       if (activeLesson.value?.id) {
         await coursePlayerStore.loadCourse(route.params.id)
       }
+    }
+    if (result.dropped > 0) {
+      toastStore.push({
+        type: 'info',
+        title: 'Sebagian sync dilewati',
+        message: `${result.dropped} update progress gagal sinkron berulang dan dibuang.`,
+      })
     }
   } catch {
     // no-op

@@ -11,22 +11,52 @@
       </div>
 
       <nav class="menu menu-top" :class="{ open: isMenuOpen }">
-        <RouterLink
-          v-for="item in navItems"
-          :key="item.label"
-          :to="item.to"
-          class="menu-link"
-          @click="isMenuOpen = false"
-        >
+        <RouterLink v-for="item in primaryNavItems" :key="item.label" :to="item.to" class="menu-link" @click="closeMenus">
           <span class="menu-icon">{{ item.icon }}</span>
           <span>{{ item.label }}</span>
         </RouterLink>
+
+        <div
+          v-if="managementNavItems.length"
+          class="menu-group"
+          :class="{ open: isManagementMenuOpen }"
+          @mouseenter="openManagementMenu"
+          @mouseleave="closeManagementMenuDesktop"
+        >
+          <button
+            type="button"
+            class="menu-link menu-group-btn"
+            :class="{ active: isManagementActive }"
+            aria-haspopup="menu"
+            :aria-expanded="String(isManagementMenuOpen)"
+            @mouseenter="openManagementMenu"
+            @click="toggleManagementMenu"
+          >
+            <span class="menu-icon">{{ managementIcon }}</span>
+            <span>Management</span>
+            <span class="menu-caret">▾</span>
+          </button>
+          <transition name="drop-fade">
+            <div v-if="isManagementMenuOpen" class="menu-submenu" role="menu">
+              <RouterLink
+                v-for="item in managementNavItems"
+                :key="item.label"
+                :to="item.to"
+                class="menu-submenu-link"
+                role="menuitem"
+                @click="closeMenus"
+              >
+                <span class="menu-icon">{{ item.icon }}</span>
+                <span>{{ item.label }}</span>
+              </RouterLink>
+            </div>
+          </transition>
+        </div>
       </nav>
 
       <div class="topnav-right">
         <div class="topnav-chip">
-          <p class="topnav-chip-title">Learning Streak</p>
-          <p class="topnav-chip-value">12 hari</p>
+          <p class="topnav-chip-inline">Learning Streak · <strong>12 hari</strong></p>
         </div>
 
         <button class="icon-btn" type="button" @click="togglePanel('theme')" aria-label="Template themes">
@@ -132,33 +162,57 @@ const activePanel = ref(null)
 
 const { templateOptions, currentTemplate, setTemplate } = useTemplateSwitcher()
 
-const navLabels = [
+const primaryNavLabels = [
   { label: 'Dashboard', to: '/' },
-  { label: 'Course Detail', to: '/courses/ui-101' },
-  { label: 'Quiz', to: '/quiz/ui-101' },
-  { label: 'Profile', to: '/profile' },
+  { label: 'Course View', to: '/courses/ui-101' },
+  { label: 'Quiz View', to: '/quiz/ui-101' },
 ]
-
-const instructorNav = [{ label: 'Quiz Admin', to: '/quiz-admin' }]
-const adminOnlyNav = [{ label: 'Users', to: '/users' }]
+const managementNavByRole = {
+  instructor: [
+    { label: 'Manage Quiz', to: '/management/quizzes', name: 'quiz-admin' },
+    { label: 'Manage Course', to: '/management/courses', name: 'course-management' },
+  ],
+  admin: [
+    { label: 'Manage Quiz', to: '/management/quizzes', name: 'quiz-admin' },
+    { label: 'Manage Course', to: '/management/courses', name: 'course-management' },
+    { label: 'User Management', to: '/management/users', name: 'users' },
+  ],
+}
 
 const iconMap = {
   aurora: ['◉', '◈', '◌', '◎', '◍'],
   sunrise: ['☀', '✦', '✎', '☺', '✿'],
 }
 
-const navItems = computed(() => {
+const primaryNavItems = computed(() => {
   const icons = iconMap[currentTemplate.value] ?? iconMap.sunrise
-  const role = profile.value?.accessRole
-  const labels = [
-    ...navLabels,
-    ...(role === 'admin' || role === 'instructor' ? instructorNav : []),
-    ...(role === 'admin' ? adminOnlyNav : []),
-  ]
-  return labels.map((item, index) => ({
+  return primaryNavLabels.map((item, index) => ({
     ...item,
     icon: icons[index] ?? '•',
   }))
+})
+
+const managementNavItems = computed(() => {
+  const role = profile.value?.accessRole
+  const items = managementNavByRole[role] || []
+  const icons = iconMap[currentTemplate.value] ?? iconMap.sunrise
+  return items.map((item, index) => ({
+    ...item,
+    icon: icons[index + primaryNavLabels.length] ?? '•',
+  }))
+})
+
+const managementIcon = computed(() => {
+  const icons = iconMap[currentTemplate.value] ?? iconMap.sunrise
+  return icons[primaryNavLabels.length] ?? '•'
+})
+
+const isManagementMenuOpen = ref(false)
+const managementCloseTimer = ref(null)
+
+const isManagementActive = computed(() => {
+  if (!managementNavItems.value.length) return false
+  return managementNavItems.value.some((item) => route.name === item.name)
 })
 
 const initials = computed(() => {
@@ -175,6 +229,7 @@ const initials = computed(() => {
 
 const togglePanel = (panel) => {
   activePanel.value = activePanel.value === panel ? null : panel
+  isManagementMenuOpen.value = false
   if (activePanel.value === 'notif') {
     notificationStore.load()
   }
@@ -183,11 +238,13 @@ const togglePanel = (panel) => {
 const selectTemplate = (id) => {
   setTemplate(id)
   activePanel.value = null
+  isManagementMenuOpen.value = false
 }
 
 const goToProfileSection = (tab) => {
   router.push({ name: 'profile', query: { tab } })
   activePanel.value = null
+  isManagementMenuOpen.value = false
 }
 
 const signOut = async () => {
@@ -195,6 +252,7 @@ const signOut = async () => {
   notificationStore.clear()
   activePanel.value = null
   isMenuOpen.value = false
+  isManagementMenuOpen.value = false
   toastStore.push({
     type: 'info',
     title: 'Signed Out',
@@ -220,10 +278,46 @@ const markAllRead = () => {
   notificationStore.markAllRead()
 }
 
+const closeMenus = () => {
+  isMenuOpen.value = false
+  isManagementMenuOpen.value = false
+  activePanel.value = null
+  clearManagementCloseTimer()
+}
+
+const toggleManagementMenu = () => {
+  clearManagementCloseTimer()
+  isManagementMenuOpen.value = !isManagementMenuOpen.value
+  activePanel.value = null
+}
+
+const openManagementMenu = () => {
+  if (window.innerWidth <= 760) return
+  clearManagementCloseTimer()
+  isManagementMenuOpen.value = true
+}
+
+const closeManagementMenuDesktop = () => {
+  if (window.innerWidth <= 760) return
+  clearManagementCloseTimer()
+  managementCloseTimer.value = window.setTimeout(() => {
+    isManagementMenuOpen.value = false
+    managementCloseTimer.value = null
+  }, 140)
+}
+
+const clearManagementCloseTimer = () => {
+  if (!managementCloseTimer.value) return
+  window.clearTimeout(managementCloseTimer.value)
+  managementCloseTimer.value = null
+}
+
 const onClickOutside = (event) => {
   if (!topnavRoot.value?.contains(event.target)) {
     activePanel.value = null
     isMenuOpen.value = false
+    isManagementMenuOpen.value = false
+    clearManagementCloseTimer()
   }
 }
 
@@ -232,6 +326,8 @@ watch(
   () => {
     isMenuOpen.value = false
     activePanel.value = null
+    isManagementMenuOpen.value = false
+    clearManagementCloseTimer()
   },
 )
 
@@ -242,6 +338,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  clearManagementCloseTimer()
   document.removeEventListener('click', onClickOutside)
 })
 </script>
