@@ -1,4 +1,5 @@
 import { authService } from '../../authService'
+import { authSession } from '../../authSession'
 import { auditLogService } from '../../auditLogService'
 import { coursePlayerService } from '../../coursePlayerService'
 import { lessonDiscussionService } from '../../lessonDiscussionService'
@@ -10,7 +11,57 @@ import { accessLevels, permissionLabels, userAccountService } from '../../userAc
 const localQuizSessions = new Map()
 const LOCAL_QUIZ_BANK_KEY = 'curiosity:lms:quiz-bank:v1'
 const LOCAL_COURSE_MGMT_KEY = 'curiosity:lms:course-management:v1'
+const LOCAL_COURSE_MGMT_PERMISSION_KEY = 'curiosity:lms:course-management:permissions:v1'
+const LOCAL_TELEMETRY_KEY = 'curiosity:lms:telemetry:v1'
+const LOCAL_COURSE_MGMT_JOBS_KEY = 'curiosity:lms:course-management:jobs:v1'
+const LOCAL_COURSE_MGMT_DLQ_KEY = 'curiosity:lms:course-management:dlq:v1'
+const LOCAL_NOTIFICATION_CHANNELS_KEY = 'curiosity:lms:notification-channels:v1'
+const LOCAL_NOTIFICATION_DELIVERY_LOGS_KEY = 'curiosity:lms:notification-delivery-logs:v1'
 const seedQuizIds = ['ui-101', 'ui-101-m1', 'fe-101-m1', 'pm-101-m1']
+const courseManagementPermissionDefault = {
+  admin: {
+    view: true,
+    create: true,
+    edit: true,
+    delete: true,
+    publish: true,
+    schedule: true,
+    bulk: true,
+    importExport: true,
+    history: true,
+    duplicate: true,
+    restoreRevision: true,
+    managePermissions: true,
+  },
+  instructor: {
+    view: true,
+    create: true,
+    edit: true,
+    delete: false,
+    publish: true,
+    schedule: true,
+    bulk: true,
+    importExport: true,
+    history: true,
+    duplicate: true,
+    restoreRevision: false,
+    managePermissions: false,
+  },
+  student: {
+    view: false,
+    create: false,
+    edit: false,
+    delete: false,
+    publish: false,
+    schedule: false,
+    bulk: false,
+    importExport: false,
+    history: false,
+    duplicate: false,
+    restoreRevision: false,
+    managePermissions: false,
+  },
+}
 
 const readJson = (key, fallback) => {
   if (typeof localStorage === 'undefined') return fallback
@@ -54,6 +105,187 @@ const readManagedCourses = () => {
 
 const writeManagedCourses = (courses) => {
   writeJson(LOCAL_COURSE_MGMT_KEY, Array.isArray(courses) ? courses : [])
+}
+const readCourseManagementPermissionMatrix = () => {
+  const value = readJson(LOCAL_COURSE_MGMT_PERMISSION_KEY, courseManagementPermissionDefault)
+  return value && typeof value === 'object' ? value : courseManagementPermissionDefault
+}
+const writeCourseManagementPermissionMatrix = (matrix) => {
+  writeJson(LOCAL_COURSE_MGMT_PERMISSION_KEY, matrix)
+}
+const getCurrentLocalRole = () => {
+  const session = authSession.read()
+  return session?.user?.role || 'student'
+}
+const getCurrentLocalUser = () => {
+  const session = authSession.read()
+  return session?.user || null
+}
+const readTelemetryEvents = () => {
+  const value = readJson(LOCAL_TELEMETRY_KEY, [])
+  return Array.isArray(value) ? value : []
+}
+const writeTelemetryEvents = (events) => {
+  writeJson(LOCAL_TELEMETRY_KEY, Array.isArray(events) ? events : [])
+}
+const readCourseManagementJobs = () => {
+  const value = readJson(LOCAL_COURSE_MGMT_JOBS_KEY, [])
+  return Array.isArray(value) ? value : []
+}
+const writeCourseManagementJobs = (jobs) => {
+  writeJson(LOCAL_COURSE_MGMT_JOBS_KEY, Array.isArray(jobs) ? jobs : [])
+}
+const readCourseManagementDlq = () => {
+  const value = readJson(LOCAL_COURSE_MGMT_DLQ_KEY, [])
+  return Array.isArray(value) ? value : []
+}
+const writeCourseManagementDlq = (items) => {
+  writeJson(LOCAL_COURSE_MGMT_DLQ_KEY, Array.isArray(items) ? items : [])
+}
+const localLevelScore = (level) => {
+  const order = ['beginner', 'intermediate', 'advanced']
+  const index = order.indexOf(String(level || '').toLowerCase())
+  return index >= 0 ? index : 0
+}
+const suggestLocalPrerequisites = (course, allCourses = []) => {
+  const currentLevelScore = localLevelScore(course?.level)
+  if (currentLevelScore <= 0) return []
+  const currentCategory = String(course?.category || '').trim().toLowerCase()
+  const candidates = allCourses
+    .filter((item) => item.id !== course?.id)
+    .filter((item) => localLevelScore(item.level) < currentLevelScore)
+    .sort((a, b) => {
+      const aSame = String(a.category || '').trim().toLowerCase() === currentCategory
+      const bSame = String(b.category || '').trim().toLowerCase() === currentCategory
+      if (aSame !== bSame) return aSame ? -1 : 1
+      return localLevelScore(b.level) - localLevelScore(a.level)
+    })
+  return [...new Set(candidates.slice(0, currentLevelScore).map((item) => item.id))]
+}
+const executeLocalCourseJob = (courses, job) => {
+  const ids = Array.isArray(job?.ids) ? job.ids : []
+  let processed = 0
+  const errors = []
+  let nextCourses = [...courses]
+  for (const id of ids) {
+    const target = nextCourses.find((item) => item.id === id)
+    if (!target) continue
+    try {
+      if (job.type === 'bulk-delete') {
+        nextCourses = nextCourses.filter((item) => item.id !== id)
+        processed += 1
+        continue
+      }
+      const updatedAt = new Date().toISOString()
+      const version = Math.max(1, Number(target.version || 1)) + 1
+      if (job.type === 'bulk-status') {
+        const status = String(job.statusValue || 'draft')
+        nextCourses = nextCourses.map((item) => (item.id === id ? { ...item, status, version, updatedAt } : item))
+        processed += 1
+        continue
+      }
+      if (job.type === 'bulk-auto-prerequisite') {
+        const suggested = suggestLocalPrerequisites(target, nextCourses)
+        nextCourses = nextCourses.map((item) =>
+          item.id === id
+            ? {
+                ...item,
+                settings: {
+                  ...(item.settings || {}),
+                  prerequisiteCourseIds: suggested,
+                },
+                version,
+                updatedAt,
+              }
+            : item,
+        )
+        processed += 1
+        continue
+      }
+      if (job.type === 'bulk-clear-prerequisite') {
+        nextCourses = nextCourses.map((item) =>
+          item.id === id
+            ? {
+                ...item,
+                settings: {
+                  ...(item.settings || {}),
+                  prerequisiteCourseIds: [],
+                },
+                version,
+                updatedAt,
+              }
+            : item,
+        )
+        processed += 1
+        continue
+      }
+      throw new Error('Unknown local job type.')
+    } catch (error) {
+      errors.push({
+        id,
+        message: error?.message || 'Local job failed.',
+      })
+    }
+  }
+  return {
+    courses: nextCourses,
+    processed,
+    total: ids.length,
+    errorCount: errors.length,
+    errors,
+    status: errors.length > 0 && processed > 0 ? 'partial' : errors.length > 0 ? 'failed' : 'completed',
+  }
+}
+const defaultNotificationChannels = {
+  webhookEnabled: false,
+  webhookUrl: '',
+  emailEnabled: false,
+  emailFrom: 'no-reply@curiosity.app',
+}
+const readNotificationChannels = () => {
+  const value = readJson(LOCAL_NOTIFICATION_CHANNELS_KEY, defaultNotificationChannels)
+  return value && typeof value === 'object' ? { ...defaultNotificationChannels, ...value } : { ...defaultNotificationChannels }
+}
+const writeNotificationChannels = (channels) => {
+  writeJson(LOCAL_NOTIFICATION_CHANNELS_KEY, { ...defaultNotificationChannels, ...(channels || {}) })
+}
+const readNotificationDeliveryLogs = () => {
+  const value = readJson(LOCAL_NOTIFICATION_DELIVERY_LOGS_KEY, [])
+  return Array.isArray(value) ? value : []
+}
+const writeNotificationDeliveryLogs = (logs) => {
+  writeJson(LOCAL_NOTIFICATION_DELIVERY_LOGS_KEY, Array.isArray(logs) ? logs : [])
+}
+const buildImmutableAuditChain = (items = []) => {
+  const sorted = [...items].sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')))
+  let prevHash = 'genesis'
+  return sorted.map((item) => {
+    const seed = JSON.stringify({
+      actor: item.actor || '',
+      action: item.action || '',
+      target: item.target || '',
+      detail: item.detail || '',
+      timestamp: item.timestamp || '',
+      prevHash,
+    })
+    let hash = 0
+    for (let index = 0; index < seed.length; index += 1) {
+      hash = (hash << 5) - hash + seed.charCodeAt(index)
+      hash |= 0
+    }
+    const entry = {
+      id: item.id || `audit-local-${Math.random().toString(36).slice(2, 10)}`,
+      actor: item.actor || '',
+      action: item.action || '',
+      target: item.target || '',
+      detail: item.detail || '',
+      timestamp: item.timestamp || '',
+      prevHash,
+      hash: `local-${Math.abs(hash)}`,
+    }
+    prevHash = entry.hash
+    return entry
+  })
 }
 
 const quizMeta = (quiz) => ({
@@ -380,12 +612,122 @@ export const localAdapter = {
   },
   audit: {
     list: (limit = 120) => Promise.resolve(auditLogService.list(limit)),
+    listImmutable: (limit = 120) =>
+      Promise.resolve().then(() => buildImmutableAuditChain(auditLogService.list(limit)).slice(0, Math.max(1, Number(limit || 120)))),
+    verifyImmutable: () =>
+      Promise.resolve().then(() => {
+        const chain = buildImmutableAuditChain(auditLogService.list(500))
+        const isValid = chain.every((item, index) => index === 0 || item.prevHash === chain[index - 1].hash)
+        return {
+          ok: isValid,
+          total: chain.length,
+          brokenAt: isValid ? -1 : chain.findIndex((item, index) => index > 0 && item.prevHash !== chain[index - 1].hash),
+          lastHash: chain[0]?.hash || '',
+        }
+      }),
   },
   notifications: {
     list: (limit, user) => Promise.resolve(lessonDiscussionService.listActivity(user?.id, limit)),
+    getChannels: (_payload, user) =>
+      Promise.resolve().then(() => {
+        const actor = user || getCurrentLocalUser() || {}
+        if (actor?.role !== 'admin') {
+          const error = new Error('Forbidden')
+          error.code = 'FORBIDDEN'
+          throw error
+        }
+        return readNotificationChannels()
+      }),
+    saveChannels: (payload, user) =>
+      Promise.resolve().then(() => {
+        const actor = user || getCurrentLocalUser() || {}
+        if (actor?.role !== 'admin') {
+          const error = new Error('Forbidden')
+          error.code = 'FORBIDDEN'
+          throw error
+        }
+        const next = {
+          webhookEnabled: Boolean(payload?.webhookEnabled),
+          webhookUrl: String(payload?.webhookUrl || ''),
+          emailEnabled: Boolean(payload?.emailEnabled),
+          emailFrom: String(payload?.emailFrom || 'no-reply@curiosity.app'),
+        }
+        writeNotificationChannels(next)
+        return next
+      }),
+    listDeliveryLogs: (limit = 100, user) =>
+      Promise.resolve().then(() => {
+        const actor = user || getCurrentLocalUser() || {}
+        if (actor?.role !== 'admin') {
+          const error = new Error('Forbidden')
+          error.code = 'FORBIDDEN'
+          throw error
+        }
+        return readNotificationDeliveryLogs().slice(0, Math.max(1, Math.min(Number(limit || 100), 500)))
+      }),
+    testDelivery: (payload, user) =>
+      Promise.resolve().then(() => {
+        const actor = user || getCurrentLocalUser() || {}
+        if (actor?.role !== 'admin') {
+          const error = new Error('Forbidden')
+          error.code = 'FORBIDDEN'
+          throw error
+        }
+        const channels = readNotificationChannels()
+        const channel = payload?.channel === 'email' ? 'email' : 'webhook'
+        const enabled = channel === 'webhook' ? channels.webhookEnabled && channels.webhookUrl : channels.emailEnabled
+        const status = enabled ? (channel === 'webhook' ? 'delivered' : 'queued') : 'skipped'
+        const item = {
+          id: `delivery-local-${Math.random().toString(36).slice(2, 10)}`,
+          channel,
+          status,
+          target: channel === 'webhook' ? channels.webhookUrl : channels.emailFrom,
+          message: String(payload?.message || 'Test delivery'),
+          createdAt: new Date().toISOString(),
+          actorEmail: actor?.email || '',
+        }
+        const next = [item, ...readNotificationDeliveryLogs()].slice(0, 500)
+        writeNotificationDeliveryLogs(next)
+        return item
+      }),
   },
   analytics: {
     getLearning: (_payload, user) => Promise.resolve(coursePlayerService.getLearningAnalytics(user?.id)),
+  },
+  observability: {
+    track: (payload, user) =>
+      Promise.resolve().then(() => {
+        const actor = user || getCurrentLocalUser() || {}
+        const nowIso = new Date().toISOString()
+        const events = readTelemetryEvents()
+        const next = [
+          {
+            id: `evt-local-${Math.random().toString(36).slice(2, 10)}`,
+            domain: String(payload?.domain || 'app'),
+            action: String(payload?.action || 'unknown'),
+            severity: String(payload?.severity || 'info'),
+            message: String(payload?.message || ''),
+            context: payload?.context && typeof payload.context === 'object' ? payload.context : {},
+            meta: payload?.meta && typeof payload.meta === 'object' ? payload.meta : {},
+            actorId: actor?.id || '',
+            actorEmail: actor?.email || '',
+            createdAt: nowIso,
+          },
+          ...events,
+        ].slice(0, 1000)
+        writeTelemetryEvents(next)
+        return { ok: true }
+      }),
+    list: (limit = 100, user) =>
+      Promise.resolve().then(() => {
+        const actor = user || getCurrentLocalUser() || {}
+        if (actor?.role !== 'admin') {
+          const error = new Error('Forbidden')
+          error.code = 'FORBIDDEN'
+          throw error
+        }
+        return readTelemetryEvents().slice(0, Math.max(1, Math.min(Number(limit || 100), 500)))
+      }),
   },
   courses: {
     listCourses: (userId) => Promise.resolve(coursePlayerService.listCourses(userId)),
@@ -699,16 +1041,80 @@ export const localAdapter = {
       }),
   },
   courseManagement: {
+    getPermissions: () =>
+      Promise.resolve().then(() => {
+        const matrix = readCourseManagementPermissionMatrix()
+        const role = getCurrentLocalRole()
+        return matrix[role] || matrix.student
+      }),
+    getPermissionMatrix: () =>
+      Promise.resolve().then(() => {
+        const role = getCurrentLocalRole()
+        const matrix = readCourseManagementPermissionMatrix()
+        if (!matrix?.[role]?.managePermissions) {
+          const error = new Error('Forbidden')
+          error.code = 'FORBIDDEN'
+          throw error
+        }
+        return matrix
+      }),
+    savePermissionMatrix: (payload) =>
+      Promise.resolve().then(() => {
+        const role = getCurrentLocalRole()
+        const current = readCourseManagementPermissionMatrix()
+        if (!current?.[role]?.managePermissions) {
+          const error = new Error('Forbidden')
+          error.code = 'FORBIDDEN'
+          throw error
+        }
+        writeCourseManagementPermissionMatrix(payload)
+        return payload
+      }),
     list: () => Promise.resolve(readManagedCourses()),
     save: (payload) =>
       Promise.resolve().then(() => {
         const courses = readManagedCourses()
         const id = String(payload?.id || `course-${Math.random().toString(36).slice(2, 8)}`)
+        const existing = courses.find((course) => course.id === id) || null
+        if (existing) {
+          const incomingVersion = Number(payload?.version || 0)
+          const currentVersion = Number(existing?.version || 1)
+          if (!Number.isFinite(incomingVersion) || incomingVersion !== currentVersion) {
+            const error = new Error('Course has changed on server. Refresh data first.')
+            error.code = 'CONFLICT'
+            error.status = 409
+            error.data = { latest: existing }
+            throw error
+          }
+        }
         const next = {
           ...payload,
           id,
+          version: existing ? Number(existing?.version || 1) + 1 : 1,
           updatedAt: payload?.updatedAt || new Date().toISOString(),
-          createdAt: payload?.createdAt || new Date().toISOString(),
+          createdAt: existing?.createdAt || payload?.createdAt || new Date().toISOString(),
+          revisions: existing
+            ? [
+                {
+                  id: `rev-${Math.random().toString(36).slice(2, 10)}`,
+                  action: 'updated',
+                  actor: 'local-user',
+                  createdAt: new Date().toISOString(),
+                  version: Number(existing?.version || 1),
+                  snapshot: { ...existing, revisions: [] },
+                },
+                ...(Array.isArray(existing?.revisions) ? existing.revisions : []),
+              ].slice(0, 40)
+            : [
+                {
+                  id: `rev-${Math.random().toString(36).slice(2, 10)}`,
+                  action: 'created',
+                  actor: 'local-user',
+                  createdAt: new Date().toISOString(),
+                  version: 1,
+                  snapshot: { ...payload, id, revisions: [] },
+                },
+              ],
         }
         const updated = courses.some((course) => course.id === id)
           ? courses.map((course) => (course.id === id ? next : course))
@@ -740,14 +1146,25 @@ export const localAdapter = {
           status: 'draft',
           publishAt: '',
           unpublishAt: '',
+          version: 1,
           createdAt: nowIso,
           updatedAt: nowIso,
+          revisions: [
+            {
+              id: `rev-${Math.random().toString(36).slice(2, 10)}`,
+              action: 'duplicated',
+              actor: 'local-user',
+              createdAt: nowIso,
+              version: 1,
+              snapshot: { ...source, revisions: [] },
+            },
+          ],
         }
         const next = [duplicated, ...courses]
         writeManagedCourses(next)
         return duplicated
       }),
-    updateStatus: (courseId, status) =>
+    listRevisions: (courseId) =>
       Promise.resolve().then(() => {
         const courses = readManagedCourses()
         const target = courses.find((course) => course.id === courseId)
@@ -756,17 +1173,286 @@ export const localAdapter = {
           error.code = 'NOT_FOUND'
           throw error
         }
+        return Array.isArray(target.revisions) ? target.revisions : []
+      }),
+    restoreRevision: (courseId, revisionId) =>
+      Promise.resolve().then(() => {
+        const courses = readManagedCourses()
+        const target = courses.find((course) => course.id === courseId)
+        if (!target) {
+          const error = new Error('Course not found.')
+          error.code = 'NOT_FOUND'
+          throw error
+        }
+        const revision = (target.revisions || []).find((item) => item.id === revisionId)
+        if (!revision?.snapshot) {
+          const error = new Error('Revision not found.')
+          error.code = 'NOT_FOUND'
+          throw error
+        }
+        const nextCourse = {
+          ...revision.snapshot,
+          id: target.id,
+          version: Number(target.version || 1) + 1,
+          updatedAt: new Date().toISOString(),
+          createdAt: target.createdAt || revision.snapshot.createdAt || new Date().toISOString(),
+          revisions: [
+            {
+              id: `rev-${Math.random().toString(36).slice(2, 10)}`,
+              action: `restore:${revision.id}`,
+              actor: 'local-user',
+              createdAt: new Date().toISOString(),
+              version: Number(target.version || 1),
+              snapshot: { ...target, revisions: [] },
+            },
+            ...(Array.isArray(target.revisions) ? target.revisions : []),
+          ].slice(0, 40),
+        }
+        const next = courses.map((course) => (course.id === courseId ? nextCourse : course))
+        writeManagedCourses(next)
+        return nextCourse
+      }),
+    updateStatus: (courseId, status, version) =>
+      Promise.resolve().then(() => {
+        const courses = readManagedCourses()
+        const target = courses.find((course) => course.id === courseId)
+        if (!target) {
+          const error = new Error('Course not found.')
+          error.code = 'NOT_FOUND'
+          throw error
+        }
+        const incomingVersion = Number(version || 0)
+        const currentVersion = Number(target?.version || 1)
+        if (!Number.isFinite(incomingVersion) || incomingVersion !== currentVersion) {
+          const error = new Error('Course has changed on server. Refresh data first.')
+          error.code = 'CONFLICT'
+          error.status = 409
+          error.data = { latest: target }
+          throw error
+        }
         const next = courses.map((course) =>
           course.id === courseId
             ? {
                 ...course,
                 status,
+                version: currentVersion + 1,
                 updatedAt: new Date().toISOString(),
+                revisions: [
+                  {
+                    id: `rev-${Math.random().toString(36).slice(2, 10)}`,
+                    action: `status:${status}`,
+                    actor: 'local-user',
+                    createdAt: new Date().toISOString(),
+                    version: currentVersion,
+                    snapshot: { ...target, revisions: [] },
+                  },
+                  ...(Array.isArray(course?.revisions) ? course.revisions : []),
+                ].slice(0, 40),
               }
             : course,
         )
         writeManagedCourses(next)
         return next.find((course) => course.id === courseId)
+      }),
+    listJobs: (limit = 120) =>
+      Promise.resolve().then(() => readCourseManagementJobs().slice(0, Math.max(1, Math.min(Number(limit || 120), 500)))),
+    enqueueJob: (payload) =>
+      Promise.resolve().then(() => {
+        const ids = [...new Set((payload?.ids || []).map((id) => String(id || '').trim()).filter(Boolean))]
+        const job = {
+          id: `cmjob-local-${Math.random().toString(36).slice(2, 10)}`,
+          type: String(payload?.type || ''),
+          ids,
+          statusValue: String(payload?.statusValue || ''),
+          status: 'pending',
+          attempts: 0,
+          processed: 0,
+          total: ids.length,
+          errorCount: 0,
+          errors: [],
+          createdBy: getCurrentLocalUser()?.email || '',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          lastRunAt: '',
+          nextRunAt: '',
+          finishedAt: '',
+        }
+        const next = [job, ...readCourseManagementJobs()].slice(0, 1000)
+        writeCourseManagementJobs(next)
+        return job
+      }),
+    processDueJobs: () =>
+      Promise.resolve().then(() => {
+        const jobs = readCourseManagementJobs()
+        const dlq = readCourseManagementDlq()
+        const due = jobs.filter((job) => ['pending', 'retrying'].includes(job.status)).slice(0, 5)
+        const results = []
+        let courses = readManagedCourses()
+        for (const job of due) {
+          job.status = 'running'
+          job.lastRunAt = new Date().toISOString()
+          job.updatedAt = job.lastRunAt
+          const execution = executeLocalCourseJob(courses, job)
+          courses = execution.courses
+          job.processed = execution.processed
+          job.total = execution.total
+          job.errorCount = execution.errorCount
+          job.errors = execution.errors
+          job.attempts = Number(job.attempts || 0) + 1
+          if (execution.status === 'failed' && job.attempts < 3) {
+            job.status = 'retrying'
+            job.nextRunAt = new Date(Date.now() + job.attempts * 5000).toISOString()
+          } else {
+            job.status = execution.status
+            job.finishedAt = new Date().toISOString()
+            job.nextRunAt = ''
+            if (execution.errorCount > 0) {
+              dlq.unshift({
+                id: `dlq-local-${Math.random().toString(36).slice(2, 10)}`,
+                sourceJobId: String(job.id || ''),
+                reason: execution.status === 'partial' ? 'partial-failure' : 'max-retry-reached',
+                status: 'open',
+                createdAt: new Date().toISOString(),
+                redrivenAt: '',
+                redriveCount: 0,
+                snapshot: {
+                  id: String(job.id || ''),
+                  type: String(job.type || ''),
+                  ids: Array.isArray(job.ids) ? job.ids : [],
+                  statusValue: String(job.statusValue || ''),
+                  attempts: Number(job.attempts || 0),
+                  processed: Number(job.processed || 0),
+                  total: Number(job.total || 0),
+                  errorCount: Number(job.errorCount || 0),
+                  errors: Array.isArray(job.errors) ? job.errors : [],
+                },
+              })
+            }
+          }
+          job.updatedAt = new Date().toISOString()
+          results.push({
+            id: job.id,
+            status: job.status,
+            processed: job.processed,
+            total: job.total,
+            errorCount: job.errorCount,
+          })
+        }
+        writeManagedCourses(courses)
+        writeCourseManagementJobs(jobs)
+        writeCourseManagementDlq(dlq.slice(0, 1000))
+        return { processedJobs: results.length, results }
+      }),
+    runJob: (jobId) =>
+      Promise.resolve().then(async () => {
+        const jobs = readCourseManagementJobs()
+        const target = jobs.find((job) => job.id === jobId)
+        if (!target) {
+          const error = new Error('Job not found.')
+          error.code = 'NOT_FOUND'
+          throw error
+        }
+        target.status = 'pending'
+        target.nextRunAt = ''
+        writeCourseManagementJobs(jobs)
+        const result = await localAdapter.courseManagement.processDueJobs()
+        return result.results?.[0] || { id: target.id, status: target.status }
+      }),
+    removeJob: (jobId) =>
+      Promise.resolve().then(() => {
+        const jobs = readCourseManagementJobs()
+        const exists = jobs.some((job) => job.id === jobId)
+        if (!exists) {
+          const error = new Error('Job not found.')
+          error.code = 'NOT_FOUND'
+          throw error
+        }
+        writeCourseManagementJobs(jobs.filter((job) => job.id !== jobId))
+        return null
+      }),
+    listDlq: (limit = 120) =>
+      Promise.resolve().then(() => readCourseManagementDlq().slice(0, Math.max(1, Math.min(Number(limit || 120), 500)))),
+    redriveDlq: (dlqId) =>
+      Promise.resolve().then(() => {
+        const dlqItems = readCourseManagementDlq()
+        const target = dlqItems.find((item) => item.id === dlqId)
+        if (!target) {
+          const error = new Error('DLQ item not found.')
+          error.code = 'NOT_FOUND'
+          throw error
+        }
+        const job = {
+          id: `cmjob-local-${Math.random().toString(36).slice(2, 10)}`,
+          type: String(target?.snapshot?.type || ''),
+          ids: Array.isArray(target?.snapshot?.ids) ? target.snapshot.ids : [],
+          statusValue: String(target?.snapshot?.statusValue || ''),
+          status: 'pending',
+          attempts: 0,
+          processed: 0,
+          total: Array.isArray(target?.snapshot?.ids) ? target.snapshot.ids.length : 0,
+          errorCount: 0,
+          errors: [],
+          createdBy: getCurrentLocalUser()?.email || '',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          lastRunAt: '',
+          nextRunAt: '',
+          finishedAt: '',
+        }
+        const nextJobs = [job, ...readCourseManagementJobs()].slice(0, 1000)
+        writeCourseManagementJobs(nextJobs)
+        const nextDlq = dlqItems.map((item) =>
+          item.id === dlqId
+            ? {
+                ...item,
+                status: 'redriven',
+                redriveCount: Number(item.redriveCount || 0) + 1,
+                redrivenAt: new Date().toISOString(),
+              }
+            : item,
+        )
+        writeCourseManagementDlq(nextDlq)
+        return { queued: job, dlq: nextDlq.find((item) => item.id === dlqId) }
+      }),
+    getWorkerLease: () => Promise.resolve(null),
+    exportComplianceBundle: (courseId) =>
+      Promise.resolve().then(() => {
+        const courses = readManagedCourses()
+        const target = courses.find((item) => item.id === courseId)
+        if (!target) {
+          const error = new Error('Course not found.')
+          error.code = 'NOT_FOUND'
+          throw error
+        }
+        const audits = auditLogService.list(1000).filter((item) => String(item.target || '').includes(courseId))
+        const jobs = readCourseManagementJobs().filter((item) => Array.isArray(item.ids) && item.ids.includes(courseId))
+        const dlq = readCourseManagementDlq().filter((item) => Array.isArray(item?.snapshot?.ids) && item.snapshot.ids.includes(courseId))
+        return {
+          schemaVersion: '1.0',
+          generatedAt: new Date().toISOString(),
+          generatedBy: getCurrentLocalUser()?.email || 'local-user',
+          course: target,
+          revisions: Array.isArray(target.revisions) ? target.revisions : [],
+          audit: {
+            mutable: audits,
+            immutableVerify: {
+              ok: true,
+              total: audits.length,
+              brokenAt: -1,
+              lastHash: '',
+            },
+            immutableSample: buildImmutableAuditChain(audits).slice(0, 120),
+          },
+          operations: {
+            queue: jobs,
+            dlq,
+            telemetry: readTelemetryEvents().filter((item) => item?.context?.courseId === courseId),
+          },
+          notifications: {
+            channels: readNotificationChannels(),
+            deliveryLogs: readNotificationDeliveryLogs().slice(0, 200),
+          },
+        }
       }),
   },
   quiz: {

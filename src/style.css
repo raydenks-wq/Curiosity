@@ -58,6 +58,18 @@ h2,
   box-sizing: border-box;
 }
 
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
@@ -1005,6 +1017,18 @@ a {
   color: var(--text-muted);
 }
 
+.cm-asset-history li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.cm-asset-history li .ghost-btn {
+  padding: 0.2rem 0.5rem;
+  font-size: 0.72rem;
+}
+
 .cm-prerequisite-chip-list {
   display: flex;
   flex-wrap: wrap;
@@ -1081,6 +1105,13 @@ a {
   filter: brightness(0.98);
 }
 
+.cm-dependency-node:focus-visible {
+  outline: none;
+  stroke: color-mix(in srgb, var(--primary) 80%, #0f172a);
+  stroke-width: 2.2;
+  filter: drop-shadow(0 0 0.25rem color-mix(in srgb, var(--primary) 35%, transparent));
+}
+
 .cm-dependency-node.not-clickable {
   cursor: default;
 }
@@ -1127,6 +1158,12 @@ a {
   font-size: 12px;
   fill: var(--text-strong);
   font-weight: 600;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cm-dependency-node {
+    transition: none;
+  }
 }
 
 .cm-dependency-legend {
@@ -1233,6 +1270,147 @@ a {
   width: min(420px, 100%);
   display: grid;
   gap: 0.55rem;
+}
+
+.cm-observability-controls {
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: end;
+}
+
+.cm-observability-kpi,
+.cm-diff-kpi {
+  margin-top: 0.55rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.cm-observability-event-list {
+  margin-top: 0.55rem;
+  display: grid;
+  gap: 0.45rem;
+  max-height: 360px;
+  overflow: auto;
+  padding-right: 0.15rem;
+}
+
+.cm-observability-event {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 0.5rem 0.58rem;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.cm-observability-event-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+
+.cm-revision-diff-controls {
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.cm-revision-raw-grid {
+  margin-top: 0.55rem;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.cm-diff-structure-grid {
+  margin-top: 0.55rem;
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.cm-diff-structure-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 0.5rem 0.58rem;
+}
+
+.cm-diff-structure-card h5 {
+  margin: 0 0 0.25rem;
+  font-size: 0.79rem;
+}
+
+.cm-diff-structure-card p {
+  margin: 0.16rem 0;
+  font-size: 0.76rem;
+}
+
+.cm-revision-raw-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 0.5rem;
+}
+
+.cm-revision-raw-card h5 {
+  margin: 0 0 0.35rem;
+  font-size: 0.8rem;
+}
+
+.cm-revision-raw-card pre {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.45rem;
+}
+
+.cm-localization-card {
+  margin-top: 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 0.5rem 0.58rem;
+}
+
+.cm-localization-card h5 {
+  margin: 0 0 0.35rem;
+  font-size: 0.8rem;
+}
+
+.cm-sev-error {
+  background: #ffe9ea;
+  color: #8a2e2e;
+}
+
+.cm-sev-warning {
+  background: #fff5dd;
+  color: #8c5a11;
+}
+
+.cm-sev-info {
+  background: #e7f5ff;
+  color: #1e4e89;
+}
+
+@media (max-width: 960px) {
+  .cm-observability-controls {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .cm-revision-diff-controls,
+  .cm-diff-structure-grid,
+  .cm-revision-raw-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .pill-danger {

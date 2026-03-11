@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { apiClient } from '../services/api/client'
+import { authSession } from '../services/authSession'
 
 const STATUS_VALUES = ['draft', 'scheduled', 'published', 'archived']
 const LESSON_TYPES = ['video', 'article', 'quiz', 'assignment', 'live']
@@ -32,6 +33,23 @@ const createDefaultSettings = () => ({
   prerequisiteCourseIds: [],
   enrollmentCap: 0,
   estimatedHours: 0,
+  approvalRequired: false,
+  approvalStatus: 'draft',
+  approverUserIds: [],
+  enrollmentStartAt: '',
+  enrollmentEndAt: '',
+  waitlistEnabled: false,
+  priceUsd: 0,
+  cohortLabel: '',
+  tags: [],
+  ownerUserIds: [],
+  editorUserIds: [],
+  releaseVersion: 'v1',
+  releaseChannel: 'stable',
+  locales: ['id'],
+  localeFallback: 'id',
+  localizedContent: {},
+  complianceRetentionDays: 365,
 })
 
 const createAsset = (index = 1) => ({
@@ -67,6 +85,7 @@ const createModule = (index = 1) => {
 
 const createBlankCourse = () => ({
   id: '',
+  version: 1,
   title: '',
   slug: '',
   description: '',
@@ -129,6 +148,11 @@ const normalizeSettings = (settings) => {
   const prerequisiteCourseIds = Array.isArray(settings?.prerequisiteCourseIds)
     ? [...new Set(settings.prerequisiteCourseIds.map((item) => String(item || '').trim()).filter(Boolean))]
     : []
+  const toIdArray = (value = []) => [...new Set((Array.isArray(value) ? value : []).map((item) => String(item || '').trim()).filter(Boolean))]
+  const toLocaleArray = (value = []) => {
+    const normalized = toIdArray(value).map((item) => item.toLowerCase())
+    return normalized.length ? normalized : ['id']
+  }
   return {
     completionMode,
     completionThresholdPercent: Math.min(100, Math.max(1, Number(settings?.completionThresholdPercent ?? fallback.completionThresholdPercent))),
@@ -141,7 +165,36 @@ const normalizeSettings = (settings) => {
     prerequisiteCourseIds,
     enrollmentCap: Math.max(0, Number(settings?.enrollmentCap ?? fallback.enrollmentCap)),
     estimatedHours: Math.max(0, Number(settings?.estimatedHours ?? fallback.estimatedHours)),
+    approvalRequired: Boolean(settings?.approvalRequired ?? fallback.approvalRequired),
+    approvalStatus: ['draft', 'in_review', 'approved', 'rejected'].includes(String(settings?.approvalStatus || '')) ? settings.approvalStatus : fallback.approvalStatus,
+    approverUserIds: toIdArray(settings?.approverUserIds),
+    enrollmentStartAt: String(settings?.enrollmentStartAt || ''),
+    enrollmentEndAt: String(settings?.enrollmentEndAt || ''),
+    waitlistEnabled: Boolean(settings?.waitlistEnabled ?? fallback.waitlistEnabled),
+    priceUsd: Math.max(0, Number(settings?.priceUsd ?? fallback.priceUsd)),
+    cohortLabel: String(settings?.cohortLabel || ''),
+    tags: toIdArray(settings?.tags),
+    ownerUserIds: toIdArray(settings?.ownerUserIds),
+    editorUserIds: toIdArray(settings?.editorUserIds),
+    releaseVersion: String(settings?.releaseVersion || fallback.releaseVersion),
+    releaseChannel: ['stable', 'beta', 'internal'].includes(String(settings?.releaseChannel || '')) ? settings.releaseChannel : fallback.releaseChannel,
+    locales: toLocaleArray(settings?.locales),
+    localeFallback: String(settings?.localeFallback || fallback.localeFallback || 'id').toLowerCase(),
+    localizedContent: settings?.localizedContent && typeof settings.localizedContent === 'object' ? settings.localizedContent : {},
+    complianceRetentionDays: Math.max(30, Number(settings?.complianceRetentionDays ?? fallback.complianceRetentionDays)),
   }
+}
+
+const canManageByScope = (course) => {
+  const session = authSession.read()
+  const role = String(session?.user?.role || '')
+  if (!course || !course.settings) return true
+  if (role === 'admin') return true
+  const userId = String(session?.user?.id || '')
+  const owners = new Set(normalizeSettings(course.settings).ownerUserIds || [])
+  const editors = new Set(normalizeSettings(course.settings).editorUserIds || [])
+  if (!owners.size && !editors.size) return true
+  return owners.has(userId) || editors.has(userId)
 }
 
 const normalizeCourse = (course, index = 0) => {
@@ -150,6 +203,7 @@ const normalizeCourse = (course, index = 0) => {
   const status = STATUS_VALUES.includes(course?.status) ? course.status : 'draft'
   return {
     id,
+    version: Math.max(1, Number(course?.version || 1)),
     title,
     slug: String(course?.slug || toSlug(title) || id),
     description: String(course?.description || ''),
@@ -168,6 +222,17 @@ const normalizeCourse = (course, index = 0) => {
     createdAt: String(course?.createdAt || new Date().toISOString()),
     updatedAt: String(course?.updatedAt || new Date().toISOString()),
   }
+}
+
+const toCourseConflictError = (error) => {
+  const status = Number(error?.status || 0)
+  const code = String(error?.code || '')
+  if (status !== 409 && code !== 'CONFLICT') return null
+  const latest = error?.data?.latest || null
+  const next = new Error(error?.message || 'Perubahan conflict dengan data terbaru di server.')
+  next.code = 'COURSE_CONFLICT'
+  next.latest = latest
+  return next
 }
 
 const clone = (value) => JSON.parse(JSON.stringify(value))
@@ -378,6 +443,23 @@ export const useCourseManagementStore = defineStore('courseManagement', {
   state: () => ({
     courses: [],
     editor: createBlankCourse(),
+    permissions: {
+      view: true,
+      create: true,
+      edit: true,
+      delete: true,
+      publish: true,
+      schedule: true,
+      bulk: true,
+      importExport: true,
+      history: true,
+      duplicate: true,
+      restoreRevision: true,
+      managePermissions: false,
+    },
+    permissionMatrix: null,
+    revisions: [],
+    revisionsLoading: false,
     isLoading: false,
     isSaving: false,
     loaded: false,
@@ -399,6 +481,61 @@ export const useCourseManagementStore = defineStore('courseManagement', {
   },
 
   actions: {
+    async loadPermissions() {
+      if (!apiClient.courseManagement?.getPermissions) return this.permissions
+      try {
+        const payload = await apiClient.courseManagement.getPermissions()
+        this.permissions = {
+          ...this.permissions,
+          ...(payload || {}),
+        }
+      } catch {
+        // endpoint may be unavailable on local mock
+      }
+      return this.permissions
+    },
+
+    async loadPermissionMatrix() {
+      if (!apiClient.courseManagement?.getPermissionMatrix) return null
+      const payload = await apiClient.courseManagement.getPermissionMatrix()
+      this.permissionMatrix = payload || null
+      return this.permissionMatrix
+    },
+
+    async savePermissionMatrix(payload) {
+      if (!apiClient.courseManagement?.savePermissionMatrix) return null
+      const saved = await apiClient.courseManagement.savePermissionMatrix(payload)
+      this.permissionMatrix = saved || payload
+      return this.permissionMatrix
+    },
+
+    async loadRevisions(courseId = this.editor?.id) {
+      if (!courseId || !apiClient.courseManagement?.listRevisions) {
+        this.revisions = []
+        return this.revisions
+      }
+      this.revisionsLoading = true
+      try {
+        const payload = await apiClient.courseManagement.listRevisions(courseId)
+        this.revisions = Array.isArray(payload) ? payload : []
+      } finally {
+        this.revisionsLoading = false
+      }
+      return this.revisions
+    },
+
+    async restoreRevision(courseId, revisionId) {
+      if (!apiClient.courseManagement?.restoreRevision) return null
+      const restoredRaw = await apiClient.courseManagement.restoreRevision(courseId, revisionId)
+      const restored = normalizeCourse(restoredRaw, 0)
+      this.courses = this.courses.some((item) => item.id === restored.id)
+        ? this.courses.map((item) => (item.id === restored.id ? restored : item))
+        : [restored, ...this.courses]
+      this.editor = clone(restored)
+      await this.loadRevisions(restored.id)
+      return restored
+    },
+
     logCourseAction(courseId, action, detail = '') {
       const entry = createAuditEntry(action, detail)
       this.courses = this.courses.map((course) =>
@@ -421,10 +558,12 @@ export const useCourseManagementStore = defineStore('courseManagement', {
       if (this.loaded) return
       this.isLoading = true
       try {
+        await this.loadPermissions()
         const managed = apiClient.courseManagement ? await apiClient.courseManagement.list() : []
         if (Array.isArray(managed) && managed.length) {
           this.courses = this.applyScheduleTransitions(managed.map((course, index) => normalizeCourse(course, index)))
           this.editor = clone(this.courses[0] || createBlankCourse())
+          if (this.editor.id) await this.loadRevisions(this.editor.id)
           this.loaded = true
           return
         }
@@ -457,6 +596,7 @@ export const useCourseManagementStore = defineStore('courseManagement', {
 
         this.courses = this.applyScheduleTransitions(seeded)
         this.editor = clone(this.courses[0] || createBlankCourse())
+        this.revisions = []
         this.loaded = true
       } finally {
         this.isLoading = false
@@ -469,12 +609,14 @@ export const useCourseManagementStore = defineStore('courseManagement', {
 
     startCreate() {
       this.editor = createBlankCourse()
+      this.revisions = []
     },
 
     editCourse(courseId) {
       const target = this.courses.find((course) => course.id === courseId)
       if (!target) return
       this.editor = clone(target)
+      this.loadRevisions(courseId).catch(() => {})
     },
 
     ensureEditorSlug() {
@@ -539,6 +681,10 @@ export const useCourseManagementStore = defineStore('courseManagement', {
       const unpublishAtMs = Date.parse(course?.unpublishAt || '')
       const scheduleOk =
         !Number.isFinite(unpublishAtMs) || !Number.isFinite(publishAtMs) || publishAtMs < unpublishAtMs
+      const enrollmentStartAtMs = Date.parse(settings.enrollmentStartAt || '')
+      const enrollmentEndAtMs = Date.parse(settings.enrollmentEndAt || '')
+      const enrollmentWindowOk =
+        !Number.isFinite(enrollmentStartAtMs) || !Number.isFinite(enrollmentEndAtMs) || enrollmentStartAtMs < enrollmentEndAtMs
 
       return [
         { id: 'title', label: 'Course title diisi', passed: Boolean(String(course?.title || '').trim()) },
@@ -556,6 +702,7 @@ export const useCourseManagementStore = defineStore('courseManagement', {
         { id: 'prerequisite', label: 'Prerequisite course valid', passed: dependency.invalidRefs.length === 0 && !dependency.selfReference },
         { id: 'prerequisite-cycle', label: 'Tidak ada cycle dependency', passed: dependency.cyclePath.length === 0 },
         { id: 'schedule', label: 'Publish/unpublish schedule valid', passed: scheduleOk },
+        { id: 'enrollment-window', label: 'Enrollment window valid', passed: enrollmentWindowOk },
       ]
     },
 
@@ -713,6 +860,11 @@ export const useCourseManagementStore = defineStore('courseManagement', {
     async saveEditor() {
       this.ensureEditorSlug()
       const normalized = normalizeCourse(this.editor, 0)
+      if (!canManageByScope(normalized)) {
+        const error = new Error('Kamu tidak punya scope permission untuk mengubah course ini.')
+        error.code = 'FORBIDDEN_SCOPE'
+        throw error
+      }
       const validation = this.validateEditor(normalized)
       if (!validation.isValid) {
         const error = new Error('Form course belum valid.')
@@ -743,6 +895,16 @@ export const useCourseManagementStore = defineStore('courseManagement', {
         this.courses = this.applyScheduleTransitions(this.courses)
         this.editor = clone(this.courses.find((item) => item.id === saved.id) || saved)
         return this.editor
+      } catch (error) {
+        const conflict = toCourseConflictError(error)
+        if (conflict?.latest) {
+          const latest = normalizeCourse(conflict.latest, 0)
+          this.courses = this.courses.some((item) => item.id === latest.id)
+            ? this.courses.map((item) => (item.id === latest.id ? latest : item))
+            : [latest, ...this.courses]
+          this.editor = clone(latest)
+        }
+        throw conflict || error
       } finally {
         this.isSaving = false
       }
@@ -750,6 +912,11 @@ export const useCourseManagementStore = defineStore('courseManagement', {
 
     async saveDraftEditor() {
       this.ensureEditorSlug()
+      if (!canManageByScope(this.editor)) {
+        const error = new Error('Kamu tidak punya scope permission untuk autosave course ini.')
+        error.code = 'FORBIDDEN_SCOPE'
+        throw error
+      }
       this.isSaving = true
       try {
         const nowIso = new Date().toISOString()
@@ -778,6 +945,16 @@ export const useCourseManagementStore = defineStore('courseManagement', {
         this.courses = this.applyScheduleTransitions(this.courses)
         this.editor = clone(this.courses.find((item) => item.id === saved.id) || saved)
         return this.editor
+      } catch (error) {
+        const conflict = toCourseConflictError(error)
+        if (conflict?.latest) {
+          const latest = normalizeCourse(conflict.latest, 0)
+          this.courses = this.courses.some((item) => item.id === latest.id)
+            ? this.courses.map((item) => (item.id === latest.id ? latest : item))
+            : [latest, ...this.courses]
+          this.editor = clone(latest)
+        }
+        throw conflict || error
       } finally {
         this.isSaving = false
       }
@@ -785,6 +962,11 @@ export const useCourseManagementStore = defineStore('courseManagement', {
 
     async deleteCourse(courseId) {
       const removed = this.courses.find((course) => course.id === courseId)
+      if (removed && !canManageByScope(removed)) {
+        const error = new Error('Kamu tidak punya scope permission untuk menghapus course ini.')
+        error.code = 'FORBIDDEN_SCOPE'
+        throw error
+      }
       this.courses = this.courses.filter((course) => course.id !== courseId)
       if (apiClient.courseManagement?.remove) {
         await apiClient.courseManagement.remove(courseId)
@@ -852,6 +1034,11 @@ export const useCourseManagementStore = defineStore('courseManagement', {
     async persistEditorStatus(status) {
       this.setEditorStatus(status)
       if (!this.editor.id) return
+      if (!canManageByScope(this.editor)) {
+        const error = new Error('Kamu tidak punya scope permission untuk mengubah status course ini.')
+        error.code = 'FORBIDDEN_SCOPE'
+        throw error
+      }
       const nowIso = new Date().toISOString()
       const nextCourse = normalizeCourse(
         {
@@ -862,12 +1049,28 @@ export const useCourseManagementStore = defineStore('courseManagement', {
         },
         0,
       )
-      const savedRaw = apiClient.courseManagement?.save ? await apiClient.courseManagement.save(nextCourse) : nextCourse
-      const saved = normalizeCourse(savedRaw, 0)
-      this.courses = this.courses.some((course) => course.id === saved.id)
-        ? this.courses.map((course) => (course.id === saved.id ? saved : course))
-        : [saved, ...this.courses]
-      this.editor = clone(saved)
+      try {
+        const savedRaw = apiClient.courseManagement?.updateStatus
+          ? await apiClient.courseManagement.updateStatus(nextCourse.id, status, nextCourse.version)
+          : apiClient.courseManagement?.save
+            ? await apiClient.courseManagement.save(nextCourse)
+            : nextCourse
+        const saved = normalizeCourse(savedRaw, 0)
+        this.courses = this.courses.some((course) => course.id === saved.id)
+          ? this.courses.map((course) => (course.id === saved.id ? saved : course))
+          : [saved, ...this.courses]
+        this.editor = clone(saved)
+      } catch (error) {
+        const conflict = toCourseConflictError(error)
+        if (conflict?.latest) {
+          const latest = normalizeCourse(conflict.latest, 0)
+          this.courses = this.courses.some((item) => item.id === latest.id)
+            ? this.courses.map((item) => (item.id === latest.id ? latest : item))
+            : [latest, ...this.courses]
+          this.editor = clone(latest)
+        }
+        throw conflict || error
+      }
     },
 
     scheduleEditor({ publishAt, unpublishAt }) {
@@ -1042,6 +1245,11 @@ export const useCourseManagementStore = defineStore('courseManagement', {
     async importCourses(payload = [], options = {}) {
       const incoming = Array.isArray(payload) ? payload : []
       const merged = [...this.courses]
+      const dryRun = Boolean(options.dryRun)
+      const atomic = Boolean(options.atomic)
+      const rollbackSnapshot = clone(this.courses)
+      const rollbackUpdatedMap = new Map()
+      const rollbackCreatedIds = new Set()
       const summary = {
         importedCount: 0,
         createdCount: 0,
@@ -1068,21 +1276,29 @@ export const useCourseManagementStore = defineStore('courseManagement', {
           }
           const course = normalizeCourse(raw, index)
           const existingIndex = merged.findIndex((item) => item.id === course.id)
+          const existingVersion = existingIndex >= 0 ? Number(merged[existingIndex]?.version || 1) : Number(course.version || 1)
           const withAudit = normalizeCourse(
             {
               ...course,
+              version: existingVersion,
               auditTrail: [createAuditEntry('imported', 'Imported from JSON'), ...(course.auditTrail || [])],
             },
             0,
           )
           if (existingIndex >= 0) {
+            if (atomic && !dryRun && !rollbackUpdatedMap.has(withAudit.id)) {
+              rollbackUpdatedMap.set(withAudit.id, clone(merged[existingIndex]))
+            }
             merged[existingIndex] = withAudit
             summary.updatedCount += 1
           } else {
             merged.unshift(withAudit)
+            if (atomic && !dryRun) {
+              rollbackCreatedIds.add(withAudit.id)
+            }
             summary.createdCount += 1
           }
-          if (apiClient.courseManagement?.save) {
+          if (!dryRun && apiClient.courseManagement?.save) {
             await apiClient.courseManagement.save(withAudit)
           }
           summary.importedCount += 1
@@ -1100,6 +1316,10 @@ export const useCourseManagementStore = defineStore('courseManagement', {
             slug: incoming[index]?.slug || '',
             message: error?.message || 'Unknown import error',
           })
+          if (atomic) {
+            summary.cancelled = true
+            break
+          }
         } finally {
           summary.processed += 1
           if (onProgress) {
@@ -1112,7 +1332,48 @@ export const useCourseManagementStore = defineStore('courseManagement', {
         }
       }
 
-      this.courses = merged
+      if (!dryRun) {
+        if (atomic && summary.errorCount > 0) {
+          summary.cancelled = true
+          this.courses = rollbackSnapshot
+          if (apiClient.courseManagement?.save || apiClient.courseManagement?.remove) {
+            for (const createdId of rollbackCreatedIds) {
+              if (apiClient.courseManagement?.remove) {
+                try {
+                  await apiClient.courseManagement.remove(createdId)
+                } catch {
+                  // best-effort rollback
+                }
+              }
+            }
+            for (const original of rollbackUpdatedMap.values()) {
+              if (apiClient.courseManagement?.save) {
+                try {
+                  await apiClient.courseManagement.save(original)
+                } catch {
+                  // best-effort rollback
+                }
+              }
+            }
+          }
+          summary.importedCount = 0
+          summary.createdCount = 0
+          summary.updatedCount = 0
+          summary.items = summary.items.map((item) =>
+            item.status === 'created' || item.status === 'updated'
+              ? { ...item, status: 'skipped', message: `Rolled back (atomic import): ${item.message}` }
+              : item,
+          )
+        } else {
+          this.courses = merged
+        }
+      } else {
+        summary.items = summary.items.map((item) =>
+          item.status === 'created' || item.status === 'updated'
+            ? { ...item, status: `dry-run-${item.status}` }
+            : item,
+        )
+      }
       return summary
     },
   },

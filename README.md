@@ -1,5 +1,9 @@
 # Curiosity LMS (Vue + Vite)
 
+Panduan alur pembuatan course versi sederhana:
+
+- [`docs/course-management-tutorial.md`](docs/course-management-tutorial.md)
+
 ## Run
 
 ```bash
@@ -17,6 +21,18 @@ Jalankan test backend (unit + integration):
 
 ```bash
 npm run test:server
+```
+
+Jalankan E2E utama:
+
+```bash
+npm run test:e2e
+```
+
+Jalankan E2E Course Management (observability + revision diff):
+
+```bash
+npm run test:e2e:course-management
 ```
 
 Dengan coverage report:
@@ -88,7 +104,23 @@ Untuk mode backend:
    - `PATCH /courses/:id/lessons/:lessonId/discussions/:discussionId`
    - `DELETE /courses/:id/lessons/:lessonId/discussions/:discussionId`
    - `GET /notifications?limit=30`
+   - `GET /notifications/channels`
+   - `PUT /notifications/channels`
+   - `POST /notifications/test-delivery`
+   - `GET /notifications/delivery-logs?limit=100`
    - `GET /audit-logs?limit=100`
+   - `GET /audit-logs/immutable?limit=100`
+   - `GET /audit-logs/immutable/verify`
+   - `GET /course-management/jobs?limit=100`
+   - `GET /course-management/jobs/worker-lease`
+   - `POST /course-management/jobs`
+   - `POST /course-management/jobs/process-due`
+   - `POST /course-management/jobs/:id/run`
+   - `DELETE /course-management/jobs/:id`
+   - `GET /course-management/jobs/dlq?limit=100`
+   - `POST /course-management/jobs/dlq/:id/redrive`
+   - `GET /course-management/:id/compliance-export`
+   - `POST /notifications/webhook/ingest`
 
 Env backend yang didukung:
 
@@ -97,6 +129,14 @@ Env backend yang didukung:
 - `JWT_EXPIRES_IN` (default: `12h`)
 - `CORS_ORIGIN` (contoh: `http://localhost:5173`)
 - `BCRYPT_ROUNDS` (default: `10`)
+- `NOTIFICATION_WEBHOOK_SECRET` (opsional, untuk HMAC signature header `X-Curiosity-Signature`)
+- `COURSE_JOB_RETRY_BASE_MS` (default: `5000`)
+- `COURSE_JOB_LEASE_TTL_MS` (default: `12000`)
+- `WEBHOOK_SIGNATURE_TOLERANCE_SEC` (default: `300`)
+- `EMAIL_PROVIDER_MODE` (`simulated` atau `webhook`, default: `simulated`)
+- `EMAIL_PROVIDER_WEBHOOK_URL` (wajib jika `EMAIL_PROVIDER_MODE=webhook`)
+- `EMAIL_PROVIDER_API_KEY` (opsional, bearer token ke provider email webhook)
+- `EMAIL_PROVIDER_TIMEOUT_MS` (default: `5000`)
 
 Catatan payload penting:
 

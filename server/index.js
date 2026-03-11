@@ -6,6 +6,7 @@ import { getSignedUrl as getSignedS3Url } from '@aws-sdk/s3-request-presigner'
 import rateLimit from 'express-rate-limit'
 import helmet from 'helmet'
 import jwt from 'jsonwebtoken'
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -33,6 +34,14 @@ const S3_ACCESS_KEY_ID = process.env.S3_ACCESS_KEY_ID || ''
 const S3_SECRET_ACCESS_KEY = process.env.S3_SECRET_ACCESS_KEY || ''
 const S3_FORCE_PATH_STYLE = String(process.env.S3_FORCE_PATH_STYLE || 'false') === 'true'
 const S3_SIGNED_URL_EXPIRES_SEC = Number(process.env.S3_SIGNED_URL_EXPIRES_SEC || 900)
+const NOTIFICATION_WEBHOOK_SECRET = process.env.NOTIFICATION_WEBHOOK_SECRET || ''
+const COURSE_JOB_RETRY_BASE_MS = Number(process.env.COURSE_JOB_RETRY_BASE_MS || 5000)
+const COURSE_JOB_LEASE_TTL_MS = Number(process.env.COURSE_JOB_LEASE_TTL_MS || 12000)
+const WEBHOOK_SIGNATURE_TOLERANCE_SEC = Number(process.env.WEBHOOK_SIGNATURE_TOLERANCE_SEC || 300)
+const EMAIL_PROVIDER_MODE = String(process.env.EMAIL_PROVIDER_MODE || 'simulated').toLowerCase()
+const EMAIL_PROVIDER_WEBHOOK_URL = process.env.EMAIL_PROVIDER_WEBHOOK_URL || ''
+const EMAIL_PROVIDER_API_KEY = process.env.EMAIL_PROVIDER_API_KEY || ''
+const EMAIL_PROVIDER_TIMEOUT_MS = Number(process.env.EMAIL_PROVIDER_TIMEOUT_MS || 5000)
 
 const allowedOrigins = CORS_ORIGIN === '*' ? '*' : CORS_ORIGIN.split(',').map((v) => v.trim()).filter(Boolean)
 
@@ -49,6 +58,7 @@ const MAX_ASSIGNMENT_UPLOAD_TOTAL_BYTES = Number(process.env.MAX_ASSIGNMENT_UPLO
 const VIDEO_COMPLETION_THRESHOLD_PERCENT = 90
 const MAX_WATCH_STEP_SEC = 20
 const ANALYTICS_WINDOW_DAYS = 7
+const MAX_WEBHOOK_REPLAY_NONCES = 5000
 
 const defaultUsers = [
   {
@@ -109,6 +119,51 @@ const defaultPermissionMatrix = {
     manageCourse: false,
     manageQuiz: false,
     manageUsers: false,
+  },
+}
+
+const defaultCourseManagementPermissionMatrix = {
+  admin: {
+    view: true,
+    create: true,
+    edit: true,
+    delete: true,
+    publish: true,
+    schedule: true,
+    bulk: true,
+    importExport: true,
+    history: true,
+    duplicate: true,
+    restoreRevision: true,
+    managePermissions: true,
+  },
+  instructor: {
+    view: true,
+    create: true,
+    edit: true,
+    delete: false,
+    publish: true,
+    schedule: true,
+    bulk: true,
+    importExport: true,
+    history: true,
+    duplicate: true,
+    restoreRevision: false,
+    managePermissions: false,
+  },
+  student: {
+    view: false,
+    create: false,
+    edit: false,
+    delete: false,
+    publish: false,
+    schedule: false,
+    bulk: false,
+    importExport: false,
+    history: false,
+    duplicate: false,
+    restoreRevision: false,
+    managePermissions: false,
   },
 }
 
@@ -743,6 +798,207 @@ const quizBulkStatusSchema = z
   })
   .strict()
 
+const telemetryEventSchema = z
+  .object({
+    domain: z.string().min(2).max(80),
+    action: z.string().min(2).max(120),
+    severity: z.enum(['info', 'warning', 'error']).optional(),
+    message: z.string().max(500).optional(),
+    context: z
+      .object({
+        feature: z.string().max(120).optional(),
+        courseId: z.string().max(120).optional(),
+        operation: z.string().max(120).optional(),
+      })
+      .passthrough()
+      .optional(),
+    meta: z.record(z.string(), z.any()).optional(),
+  })
+  .strict()
+
+const notificationChannelConfigSchema = z
+  .object({
+    webhookEnabled: z.boolean(),
+    webhookUrl: z.string().max(1500).optional().or(z.literal('')),
+    emailEnabled: z.boolean(),
+    emailFrom: z.string().max(220).optional().or(z.literal('')),
+  })
+  .strict()
+
+const notificationTestDeliverySchema = z
+  .object({
+    channel: z.enum(['webhook', 'email']),
+    message: z.string().min(1).max(500),
+  })
+  .strict()
+
+const webhookIngestSchema = z
+  .object({
+    event: z.string().min(1).max(200),
+    message: z.string().max(500).optional(),
+    courseId: z.string().max(90).optional(),
+    meta: z.record(z.string(), z.any()).optional(),
+  })
+  .strict()
+
+const courseManagementPermissionSchema = z
+  .object({
+    view: z.boolean(),
+    create: z.boolean(),
+    edit: z.boolean(),
+    delete: z.boolean(),
+    publish: z.boolean(),
+    schedule: z.boolean(),
+    bulk: z.boolean(),
+    importExport: z.boolean(),
+    history: z.boolean(),
+    duplicate: z.boolean(),
+    restoreRevision: z.boolean(),
+    managePermissions: z.boolean(),
+  })
+  .strict()
+
+const courseManagementPermissionMatrixSchema = z
+  .object({
+    admin: courseManagementPermissionSchema,
+    instructor: courseManagementPermissionSchema,
+    student: courseManagementPermissionSchema,
+  })
+  .strict()
+
+const courseManagementStatusValues = ['draft', 'scheduled', 'published', 'archived']
+const courseManagementLessonTypeValues = ['video', 'article', 'quiz', 'assignment', 'live']
+const courseManagementCompletionModes = ['lesson', 'module', 'hybrid']
+const courseManagementLevels = ['beginner', 'intermediate', 'advanced']
+const courseManagementVisibilityValues = ['public', 'private', 'invite-only']
+
+const courseManagementAssetSchema = z
+  .object({
+    id: z.string().min(1).max(90),
+    name: z.string().max(220),
+    type: z.enum(['file', 'video', 'link']),
+    url: z.string().max(1500).optional().or(z.literal('')),
+    sizeBytes: z.number().int().min(0).max(1_000_000_000).optional(),
+    version: z.number().int().min(1).max(10_000).optional(),
+    versions: z
+      .array(
+        z
+          .object({
+            version: z.number().int().min(1).max(10_000),
+            note: z.string().max(300).optional(),
+            url: z.string().max(1500).optional(),
+            updatedAt: z.string().max(80).optional(),
+          })
+          .strict(),
+      )
+      .max(100)
+      .optional(),
+    updatedAt: z.string().max(80).optional(),
+  })
+  .strict()
+
+const courseManagementLessonSchema = z
+  .object({
+    id: z.string().min(1).max(90),
+    title: z.string().max(220),
+    type: z.enum(courseManagementLessonTypeValues),
+    durationMin: z.number().int().min(1).max(24 * 60),
+    isPreview: z.boolean().optional(),
+    isLocked: z.boolean().optional(),
+    contentUrl: z.string().max(1500).optional().or(z.literal('')),
+  })
+  .strict()
+
+const courseManagementModuleSchema = z
+  .object({
+    id: z.string().min(1).max(90),
+    title: z.string().max(220),
+    description: z.string().max(3000).optional().or(z.literal('')),
+    lessons: z.array(courseManagementLessonSchema).min(1).max(300),
+  })
+  .strict()
+
+const courseManagementSettingsSchema = z
+  .object({
+    completionMode: z.enum(courseManagementCompletionModes),
+    completionThresholdPercent: z.number().int().min(1).max(100),
+    certificateEnabled: z.boolean(),
+    certificateTemplate: z.string().max(100),
+    allowRetake: z.boolean(),
+    maxRetake: z.number().int().min(0).max(200),
+    allowProgressReset: z.boolean(),
+    prerequisiteMode: z.enum(['all', 'any']).optional(),
+    prerequisiteCourseIds: z.array(z.string().min(1).max(90)).max(120).optional(),
+    enrollmentCap: z.number().int().min(0).max(2_000_000).optional(),
+    estimatedHours: z.number().min(0).max(20_000).optional(),
+    approvalRequired: z.boolean().optional(),
+    approvalStatus: z.enum(['draft', 'in_review', 'approved', 'rejected']).optional(),
+    approverUserIds: z.array(z.string().min(1).max(90)).max(120).optional(),
+    enrollmentStartAt: z.string().max(80).optional().or(z.literal('')),
+    enrollmentEndAt: z.string().max(80).optional().or(z.literal('')),
+    waitlistEnabled: z.boolean().optional(),
+    priceUsd: z.number().min(0).max(10_000_000).optional(),
+    cohortLabel: z.string().max(120).optional().or(z.literal('')),
+    tags: z.array(z.string().min(1).max(60)).max(120).optional(),
+    ownerUserIds: z.array(z.string().min(1).max(90)).max(120).optional(),
+    editorUserIds: z.array(z.string().min(1).max(90)).max(120).optional(),
+    releaseVersion: z.string().max(60).optional(),
+    releaseChannel: z.enum(['stable', 'beta', 'internal']).optional(),
+    locales: z.array(z.string().min(2).max(10)).max(20).optional(),
+    localeFallback: z.string().max(10).optional(),
+    localizedContent: z.record(z.string(), z.object({ title: z.string().max(220).optional(), description: z.string().max(5000).optional() })).optional(),
+    complianceRetentionDays: z.number().int().min(30).max(3650).optional(),
+  })
+  .strict()
+
+const courseManagementAuditEntrySchema = z
+  .object({
+    id: z.string().max(120).optional(),
+    action: z.string().max(120).optional(),
+    detail: z.string().max(500).optional(),
+    createdAt: z.string().max(80).optional(),
+  })
+  .strict()
+
+const courseManagementSaveSchema = z
+  .object({
+    id: z.string().min(1).max(90).optional(),
+    version: z.number().int().min(1).max(1_000_000).optional(),
+    title: z.string().min(1).max(220),
+    slug: z.string().min(1).max(220),
+    description: z.string().max(5000).optional().or(z.literal('')),
+    thumbnail: z.string().max(1500).optional().or(z.literal('')),
+    category: z.string().max(120).optional(),
+    level: z.enum(courseManagementLevels).optional(),
+    language: z.string().max(32).optional(),
+    visibility: z.enum(courseManagementVisibilityValues).optional(),
+    status: z.enum(courseManagementStatusValues).optional(),
+    publishAt: z.string().max(80).optional().or(z.literal('')),
+    unpublishAt: z.string().max(80).optional().or(z.literal('')),
+    modules: z.array(courseManagementModuleSchema).min(1).max(200),
+    assets: z.array(courseManagementAssetSchema).max(1000).optional(),
+    settings: courseManagementSettingsSchema,
+    auditTrail: z.array(courseManagementAuditEntrySchema).max(200).optional(),
+    createdAt: z.string().max(80).optional(),
+    updatedAt: z.string().max(80).optional(),
+  })
+  .strict()
+
+const courseManagementStatusPatchSchema = z
+  .object({
+    status: z.enum(courseManagementStatusValues),
+    version: z.number().int().min(1).max(1_000_000).optional(),
+  })
+  .strict()
+
+const courseManagementJobCreateSchema = z
+  .object({
+    type: z.enum(['bulk-status', 'bulk-delete', 'bulk-auto-prerequisite', 'bulk-clear-prerequisite']),
+    ids: z.array(z.string().min(1).max(90)).min(1).max(300),
+    statusValue: z.enum(courseManagementStatusValues).optional(),
+  })
+  .strict()
+
 const createDefaultProfileState = (user) => ({
   profile: {
     name: user.name,
@@ -778,7 +1034,513 @@ const createDefaultProfileState = (user) => ({
 })
 
 const deepClone = (value) => JSON.parse(JSON.stringify(value))
+const buildWebhookSignature = (secret, timestamp, bodyText) => {
+  const normalizedSecret = String(secret || '')
+  if (!normalizedSecret) return ''
+  const normalizedTimestamp = String(timestamp || '')
+  const normalizedBody = String(bodyText || '')
+  const digest = createHmac('sha256', normalizedSecret).update(`${normalizedTimestamp}.${normalizedBody}`).digest('hex')
+  return `v1=${digest}`
+}
+const parseWebhookTimestampMs = (rawValue) => {
+  const raw = String(rawValue || '').trim()
+  if (!raw) return Number.NaN
+  const numeric = Number(raw)
+  if (Number.isFinite(numeric)) {
+    if (numeric > 10_000_000_000) return Math.floor(numeric)
+    if (numeric > 1_000_000_000) return Math.floor(numeric * 1000)
+  }
+  const isoParsed = Date.parse(raw)
+  return Number.isFinite(isoParsed) ? isoParsed : Number.NaN
+}
+const secureTextEqual = (a, b) => {
+  const left = Buffer.from(String(a || ''), 'utf8')
+  const right = Buffer.from(String(b || ''), 'utf8')
+  if (!left.length || !right.length || left.length !== right.length) return false
+  return timingSafeEqual(left, right)
+}
+const verifyImmutableAuditChain = (items = []) => {
+  const chain = Array.isArray(items) ? items : []
+  let brokenAt = -1
+  for (let index = 0; index < chain.length; index += 1) {
+    const item = chain[index]
+    const seed = {
+      id: item.id,
+      actor: String(item.actor || ''),
+      action: String(item.action || ''),
+      target: String(item.target || ''),
+      detail: String(item.detail || ''),
+      timestamp: String(item.timestamp || ''),
+      prevHash: String(item.prevHash || ''),
+    }
+    const expectedHash = createHash('sha256').update(JSON.stringify(seed)).digest('hex')
+    if (expectedHash !== item.hash) {
+      brokenAt = index
+      break
+    }
+    if (index > 0 && item.prevHash !== chain[index - 1].hash) {
+      brokenAt = index
+      break
+    }
+  }
+  return {
+    ok: brokenAt < 0,
+    brokenAt,
+    total: chain.length,
+    lastHash: chain[0]?.hash || '',
+  }
+}
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase()
+const toSlug = (value) =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+const hasDuplicate = (values = []) => {
+  const set = new Set()
+  for (const item of values) {
+    const value = String(item || '').trim()
+    if (!value) continue
+    if (set.has(value)) return true
+    set.add(value)
+  }
+  return false
+}
+const buildCourseManagementDependencyIndex = (courses = []) => {
+  const map = {}
+  courses.forEach((course) => {
+    map[course.id] = Array.isArray(course?.settings?.prerequisiteCourseIds) ? course.settings.prerequisiteCourseIds : []
+  })
+  return map
+}
+const findDependencyCycle = (startId, dependencyById = {}) => {
+  const visiting = new Set()
+  const visited = new Set()
+  const path = []
+  const dfs = (courseId) => {
+    if (visiting.has(courseId)) {
+      const idx = path.indexOf(courseId)
+      if (idx >= 0) return [...path.slice(idx), courseId]
+      return [courseId, courseId]
+    }
+    if (visited.has(courseId)) return null
+    visiting.add(courseId)
+    path.push(courseId)
+    for (const depId of dependencyById[courseId] || []) {
+      const cycle = dfs(depId)
+      if (cycle) return cycle
+    }
+    path.pop()
+    visiting.delete(courseId)
+    visited.add(courseId)
+    return null
+  }
+  return dfs(startId) || null
+}
+const normalizeCourseManagementPermissionMatrix = (matrix) => {
+  const fallback = defaultCourseManagementPermissionMatrix
+  const rolesList = ['admin', 'instructor', 'student']
+  return Object.fromEntries(
+    rolesList.map((role) => {
+      const base = fallback[role]
+      const source = matrix?.[role] || {}
+      return [
+        role,
+        {
+          view: Boolean(source.view ?? base.view),
+          create: Boolean(source.create ?? base.create),
+          edit: Boolean(source.edit ?? base.edit),
+          delete: Boolean(source.delete ?? base.delete),
+          publish: Boolean(source.publish ?? base.publish),
+          schedule: Boolean(source.schedule ?? base.schedule),
+          bulk: Boolean(source.bulk ?? base.bulk),
+          importExport: Boolean(source.importExport ?? base.importExport),
+          history: Boolean(source.history ?? base.history),
+          duplicate: Boolean(source.duplicate ?? base.duplicate),
+          restoreRevision: Boolean(source.restoreRevision ?? base.restoreRevision),
+          managePermissions: Boolean(source.managePermissions ?? base.managePermissions),
+        },
+      ]
+    }),
+  )
+}
+const getCourseManagementPermissionsForUser = (db, user) => {
+  const matrix = normalizeCourseManagementPermissionMatrix(db?.courseManagementPermissions)
+  return matrix[user?.role] || matrix.student
+}
+const buildCourseRevisionEntry = (course, action, actor) => ({
+  id: `rev-${Math.random().toString(36).slice(2, 10)}`,
+  action: String(action || 'updated'),
+  actor: String(actor || 'system'),
+  createdAt: new Date().toISOString(),
+  version: Math.max(1, Number(course?.version || 1)),
+  snapshot: deepClone({
+    ...course,
+    revisions: [],
+  }),
+})
+const normalizeCourseManagementPayload = (payload) => {
+  const nowIso = new Date().toISOString()
+  const modules = (Array.isArray(payload.modules) ? payload.modules : []).map((module) => ({
+    id: String(module.id || ''),
+    title: String(module.title || ''),
+    description: String(module.description || ''),
+    lessons: (Array.isArray(module.lessons) ? module.lessons : []).map((lesson) => ({
+      id: String(lesson.id || ''),
+      title: String(lesson.title || ''),
+      type: String(lesson.type || 'video'),
+      durationMin: Math.max(1, Number(lesson.durationMin || 1)),
+      isPreview: Boolean(lesson.isPreview),
+      isLocked: Boolean(lesson.isLocked),
+      contentUrl: String(lesson.contentUrl || ''),
+    })),
+  }))
+  const settings = {
+    completionMode: courseManagementCompletionModes.includes(payload?.settings?.completionMode) ? payload.settings.completionMode : 'lesson',
+    completionThresholdPercent: Math.min(100, Math.max(1, Number(payload?.settings?.completionThresholdPercent || 100))),
+    certificateEnabled: Boolean(payload?.settings?.certificateEnabled ?? true),
+    certificateTemplate: String(payload?.settings?.certificateTemplate || 'default'),
+    allowRetake: Boolean(payload?.settings?.allowRetake ?? true),
+    maxRetake: Math.max(0, Number(payload?.settings?.maxRetake ?? 3)),
+    allowProgressReset: Boolean(payload?.settings?.allowProgressReset ?? false),
+    prerequisiteMode: payload?.settings?.prerequisiteMode === 'any' ? 'any' : 'all',
+    prerequisiteCourseIds: [...new Set((payload?.settings?.prerequisiteCourseIds || []).map((id) => String(id || '').trim()).filter(Boolean))],
+    enrollmentCap: Math.max(0, Number(payload?.settings?.enrollmentCap || 0)),
+    estimatedHours: Math.max(0, Number(payload?.settings?.estimatedHours || 0)),
+    approvalRequired: Boolean(payload?.settings?.approvalRequired ?? false),
+    approvalStatus: ['draft', 'in_review', 'approved', 'rejected'].includes(payload?.settings?.approvalStatus) ? payload.settings.approvalStatus : 'draft',
+    approverUserIds: [...new Set((payload?.settings?.approverUserIds || []).map((id) => String(id || '').trim()).filter(Boolean))],
+    enrollmentStartAt: String(payload?.settings?.enrollmentStartAt || ''),
+    enrollmentEndAt: String(payload?.settings?.enrollmentEndAt || ''),
+    waitlistEnabled: Boolean(payload?.settings?.waitlistEnabled ?? false),
+    priceUsd: Math.max(0, Number(payload?.settings?.priceUsd || 0)),
+    cohortLabel: String(payload?.settings?.cohortLabel || ''),
+    tags: [...new Set((payload?.settings?.tags || []).map((tag) => String(tag || '').trim()).filter(Boolean))],
+    ownerUserIds: [...new Set((payload?.settings?.ownerUserIds || []).map((id) => String(id || '').trim()).filter(Boolean))],
+    editorUserIds: [...new Set((payload?.settings?.editorUserIds || []).map((id) => String(id || '').trim()).filter(Boolean))],
+    releaseVersion: String(payload?.settings?.releaseVersion || 'v1'),
+    releaseChannel: ['stable', 'beta', 'internal'].includes(payload?.settings?.releaseChannel) ? payload.settings.releaseChannel : 'stable',
+    locales: [...new Set((payload?.settings?.locales || ['id']).map((locale) => String(locale || '').trim().toLowerCase()).filter(Boolean))],
+    localeFallback: String(payload?.settings?.localeFallback || 'id').trim().toLowerCase() || 'id',
+    localizedContent: payload?.settings?.localizedContent && typeof payload.settings.localizedContent === 'object' ? payload.settings.localizedContent : {},
+    complianceRetentionDays: Math.max(30, Number(payload?.settings?.complianceRetentionDays || 365)),
+  }
+  return {
+    id: String(payload?.id || ''),
+    version: Math.max(1, Number(payload?.version || 1)),
+    title: String(payload?.title || ''),
+    slug: String(payload?.slug || toSlug(payload?.title || '')),
+    description: String(payload?.description || ''),
+    thumbnail: String(payload?.thumbnail || ''),
+    category: String(payload?.category || 'General'),
+    level: courseManagementLevels.includes(payload?.level) ? payload.level : 'beginner',
+    language: String(payload?.language || 'id'),
+    visibility: courseManagementVisibilityValues.includes(payload?.visibility) ? payload.visibility : 'public',
+    status: courseManagementStatusValues.includes(payload?.status) ? payload.status : 'draft',
+    publishAt: String(payload?.publishAt || ''),
+    unpublishAt: String(payload?.unpublishAt || ''),
+    modules,
+    assets: Array.isArray(payload?.assets) ? payload.assets : [],
+    settings,
+    auditTrail: Array.isArray(payload?.auditTrail) ? payload.auditTrail : [],
+    createdAt: String(payload?.createdAt || nowIso),
+    updatedAt: String(payload?.updatedAt || nowIso),
+  }
+}
+const validateCourseManagementIntegrity = (course, allCourses = []) => {
+  const checks = []
+  const modules = Array.isArray(course?.modules) ? course.modules : []
+  const lessons = modules.flatMap((module) => (Array.isArray(module.lessons) ? module.lessons : []))
+  const duplicateModuleIds = hasDuplicate(modules.map((module) => module.id))
+  const duplicateLessonIds = hasDuplicate(lessons.map((lesson) => lesson.id))
+  const hasPreviewLesson = lessons.some((lesson) => Boolean(lesson.isPreview))
+  const hasValidLessonType = lessons.every((lesson) => courseManagementLessonTypeValues.includes(lesson.type))
+  const hasDuration = lessons.every((lesson) => Number(lesson.durationMin || 0) > 0)
+  const publishAtMs = Date.parse(course?.publishAt || '')
+  const unpublishAtMs = Date.parse(course?.unpublishAt || '')
+  const scheduleOk = !Number.isFinite(publishAtMs) || !Number.isFinite(unpublishAtMs) || publishAtMs < unpublishAtMs
+  const enrollmentStartAtMs = Date.parse(course?.settings?.enrollmentStartAt || '')
+  const enrollmentEndAtMs = Date.parse(course?.settings?.enrollmentEndAt || '')
+  const enrollmentWindowOk =
+    !Number.isFinite(enrollmentStartAtMs) || !Number.isFinite(enrollmentEndAtMs) || enrollmentStartAtMs < enrollmentEndAtMs
+  const prerequisiteIds = Array.isArray(course?.settings?.prerequisiteCourseIds) ? course.settings.prerequisiteCourseIds : []
+  const existingIds = new Set(allCourses.map((item) => item.id))
+  const invalidPrerequisites = prerequisiteIds.filter((id) => id !== course.id && !existingIds.has(id))
+  const selfReference = prerequisiteIds.includes(course.id)
+  const dependencyById = buildCourseManagementDependencyIndex(
+    allCourses.map((item) => (item.id === course.id ? course : item))
+  )
+  const cycle = findDependencyCycle(course.id, dependencyById)
+
+  checks.push({ id: 'slug', passed: Boolean(toSlug(course.slug)) })
+  checks.push({ id: 'module-id-unique', passed: !duplicateModuleIds })
+  checks.push({ id: 'lesson-id-unique', passed: !duplicateLessonIds })
+  checks.push({ id: 'lesson-type', passed: hasValidLessonType })
+  checks.push({ id: 'duration', passed: hasDuration })
+  checks.push({ id: 'schedule', passed: scheduleOk })
+  checks.push({ id: 'enrollment-window', passed: enrollmentWindowOk })
+  checks.push({ id: 'prerequisite-valid', passed: invalidPrerequisites.length === 0 && !selfReference })
+  checks.push({ id: 'prerequisite-cycle', passed: !cycle })
+
+  const publishChecks = [
+    { id: 'title', passed: Boolean(String(course?.title || '').trim()) },
+    { id: 'description', passed: String(course?.description || '').trim().length >= 30 },
+    { id: 'thumbnail', passed: Boolean(String(course?.thumbnail || '').trim()) },
+    { id: 'module', passed: modules.length > 0 },
+    { id: 'lesson', passed: modules.length > 0 && modules.every((module) => (module.lessons || []).length > 0) },
+    { id: 'preview', passed: hasPreviewLesson },
+    ...checks,
+  ]
+
+  return {
+    checks,
+    publishChecks,
+    invalidPrerequisites,
+    cyclePath: cycle || [],
+    hasIntegrityError: checks.some((item) => !item.passed),
+    hasPublishGap: publishChecks.some((item) => !item.passed),
+  }
+}
+const toCourseLevelScore = (level) => {
+  const order = ['beginner', 'intermediate', 'advanced']
+  const index = order.indexOf(String(level || '').toLowerCase())
+  return index >= 0 ? index : 0
+}
+const suggestCourseManagementPrerequisites = (course, allCourses = []) => {
+  const currentLevelScore = toCourseLevelScore(course?.level)
+  if (currentLevelScore <= 0) return []
+  const currentCategory = String(course?.category || '').trim().toLowerCase()
+  const candidates = (allCourses || [])
+    .filter((item) => item.id !== course?.id)
+    .map((item) => ({
+      id: item.id,
+      levelScore: toCourseLevelScore(item.level),
+      sameCategory: String(item.category || '').trim().toLowerCase() === currentCategory,
+      updatedAtMs: Date.parse(item.updatedAt || '') || 0,
+    }))
+    .filter((item) => item.levelScore < currentLevelScore)
+    .sort((a, b) => {
+      if (a.sameCategory !== b.sameCategory) return a.sameCategory ? -1 : 1
+      if (a.levelScore !== b.levelScore) return b.levelScore - a.levelScore
+      return b.updatedAtMs - a.updatedAtMs
+    })
+  const selected = []
+  const usedLevel = new Set()
+  for (const candidate of candidates) {
+    if (usedLevel.has(candidate.levelScore)) continue
+    usedLevel.add(candidate.levelScore)
+    selected.push(candidate.id)
+    if (selected.length >= currentLevelScore) break
+  }
+  return selected
+}
+const acquireCourseJobWorkerLease = (db, ownerId, ttlMs = COURSE_JOB_LEASE_TTL_MS) => {
+  const now = Date.now()
+  const lease = db?.jobWorkerLease && typeof db.jobWorkerLease === 'object' ? db.jobWorkerLease : null
+  const expiresAtMs = Date.parse(lease?.expiresAt || '')
+  const isExpired = !Number.isFinite(expiresAtMs) || expiresAtMs <= now
+  if (lease && !isExpired && lease.ownerId && lease.ownerId !== ownerId) {
+    return {
+      acquired: false,
+      lease,
+    }
+  }
+  const nextLease = {
+    ownerId,
+    acquiredAt: isExpired ? new Date(now).toISOString() : String(lease?.acquiredAt || new Date(now).toISOString()),
+    heartbeatAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + Math.max(1_000, Number(ttlMs || COURSE_JOB_LEASE_TTL_MS))).toISOString(),
+  }
+  db.jobWorkerLease = nextLease
+  return {
+    acquired: true,
+    lease: nextLease,
+  }
+}
+const releaseCourseJobWorkerLease = (db, ownerId) => {
+  const lease = db?.jobWorkerLease && typeof db.jobWorkerLease === 'object' ? db.jobWorkerLease : null
+  if (!lease) return false
+  if (lease.ownerId && lease.ownerId !== ownerId) return false
+  db.jobWorkerLease = null
+  return true
+}
+const createCourseManagementJob = (payload, actorEmail) => ({
+  id: `cmjob-${Math.random().toString(36).slice(2, 10)}`,
+  type: payload.type,
+  ids: [...new Set((payload.ids || []).map((id) => String(id || '').trim()).filter(Boolean))],
+  statusValue: payload.statusValue || '',
+  status: 'pending',
+  attempts: 0,
+  processed: 0,
+  total: Array.isArray(payload.ids) ? payload.ids.length : 0,
+  errorCount: 0,
+  errors: [],
+  createdBy: actorEmail || '',
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
+  lastRunAt: '',
+  nextRunAt: '',
+  finishedAt: '',
+})
+const pushCourseManagementJobToDlq = (db, job, reason = 'terminal-failure') => {
+  const dlqItem = {
+    id: `dlq-${Math.random().toString(36).slice(2, 10)}`,
+    sourceJobId: String(job?.id || ''),
+    reason: String(reason || 'terminal-failure'),
+    status: 'open',
+    createdAt: new Date().toISOString(),
+    redrivenAt: '',
+    redriveCount: 0,
+    snapshot: {
+      id: String(job?.id || ''),
+      type: String(job?.type || ''),
+      ids: Array.isArray(job?.ids) ? job.ids : [],
+      statusValue: String(job?.statusValue || ''),
+      attempts: Number(job?.attempts || 0),
+      processed: Number(job?.processed || 0),
+      total: Number(job?.total || 0),
+      errorCount: Number(job?.errorCount || 0),
+      errors: Array.isArray(job?.errors) ? job.errors : [],
+      finishedAt: String(job?.finishedAt || ''),
+    },
+  }
+  db.courseManagementJobDlq = [dlqItem, ...(Array.isArray(db.courseManagementJobDlq) ? db.courseManagementJobDlq : [])].slice(0, 1000)
+  return dlqItem
+}
+const executeCourseManagementJob = (db, job, actorEmail = 'system') => {
+  const ids = Array.isArray(job?.ids) ? job.ids : []
+  const errors = []
+  let processed = 0
+  for (const id of ids) {
+    const courses = Array.isArray(db.courseManagement) ? db.courseManagement.slice() : []
+    const target = courses.find((item) => item.id === id)
+    if (!target) continue
+    try {
+      let nextCourse = null
+      if (job.type === 'bulk-delete') {
+        db.courseManagement = courses.filter((item) => item.id !== id)
+        addAuditLog(db, {
+          actor: actorEmail,
+          action: 'course_mgmt_job_delete',
+          target: id,
+          detail: `Deleted course by queued job ${job.id}.`,
+        })
+        processed += 1
+        continue
+      }
+      if (job.type === 'bulk-status') {
+        const statusValue = courseManagementStatusValues.includes(job.statusValue) ? job.statusValue : 'draft'
+        nextCourse = {
+          ...target,
+          status: statusValue,
+          version: Number(target.version || 1) + 1,
+          updatedAt: new Date().toISOString(),
+          revisions: [buildCourseRevisionEntry(target, `job-status:${statusValue}`, actorEmail), ...(target.revisions || [])].slice(0, 40),
+        }
+      } else if (job.type === 'bulk-auto-prerequisite') {
+        const suggestedIds = suggestCourseManagementPrerequisites(target, courses)
+        nextCourse = {
+          ...target,
+          settings: {
+            ...target.settings,
+            prerequisiteCourseIds: suggestedIds,
+          },
+          version: Number(target.version || 1) + 1,
+          updatedAt: new Date().toISOString(),
+          revisions: [buildCourseRevisionEntry(target, 'job-auto-prerequisite', actorEmail), ...(target.revisions || [])].slice(0, 40),
+        }
+      } else if (job.type === 'bulk-clear-prerequisite') {
+        nextCourse = {
+          ...target,
+          settings: {
+            ...target.settings,
+            prerequisiteCourseIds: [],
+          },
+          version: Number(target.version || 1) + 1,
+          updatedAt: new Date().toISOString(),
+          revisions: [buildCourseRevisionEntry(target, 'job-clear-prerequisite', actorEmail), ...(target.revisions || [])].slice(0, 40),
+        }
+      } else {
+        throw new Error('Unsupported job type.')
+      }
+      const validation = validateCourseManagementIntegrity(nextCourse, courses.map((item) => (item.id === id ? nextCourse : item)))
+      if (validation.hasIntegrityError || (['published', 'scheduled'].includes(nextCourse.status) && validation.hasPublishGap)) {
+        throw new Error(`Validation failed: ${(validation.publishChecks || validation.checks).filter((item) => !item.passed).map((item) => item.id).join(', ')}`)
+      }
+      db.courseManagement = courses.map((item) => (item.id === id ? nextCourse : item))
+      addAuditLog(db, {
+        actor: actorEmail,
+        action: 'course_mgmt_job_update',
+        target: id,
+        detail: `Updated course by queued job ${job.id} (${job.type}).`,
+      })
+      processed += 1
+    } catch (error) {
+      errors.push({
+        id,
+        message: error?.message || 'Unknown job execution error.',
+      })
+    }
+  }
+  const errorCount = errors.length
+  return {
+    processed,
+    total: ids.length,
+    errorCount,
+    errors,
+    status: errorCount > 0 && processed > 0 ? 'partial' : errorCount > 0 ? 'failed' : 'completed',
+  }
+}
+const processDueCourseManagementJobs = (db, actorEmail = 'system', limit = 3) => {
+  const jobs = Array.isArray(db.courseManagementJobs) ? db.courseManagementJobs : []
+  const now = Date.now()
+  const dueJobs = jobs
+    .filter((job) => ['pending', 'retrying'].includes(job.status))
+    .filter((job) => {
+      const nextRunAtMs = Date.parse(job.nextRunAt || '')
+      return !Number.isFinite(nextRunAtMs) || nextRunAtMs <= now
+    })
+    .slice(0, Math.max(1, limit))
+  const results = []
+  for (const job of dueJobs) {
+    job.status = 'running'
+    job.lastRunAt = new Date().toISOString()
+    job.updatedAt = job.lastRunAt
+    const execution = executeCourseManagementJob(db, job, actorEmail)
+    job.processed = execution.processed
+    job.total = execution.total
+    job.errorCount = execution.errorCount
+    job.errors = execution.errors
+    job.attempts = Number(job.attempts || 0) + 1
+    if (execution.status === 'failed' && job.attempts < 3) {
+      job.status = 'retrying'
+      job.nextRunAt = new Date(Date.now() + job.attempts * COURSE_JOB_RETRY_BASE_MS).toISOString()
+    } else {
+      job.status = execution.status
+      job.finishedAt = new Date().toISOString()
+      job.nextRunAt = ''
+      if (execution.errorCount > 0) {
+        pushCourseManagementJobToDlq(
+          db,
+          job,
+          execution.status === 'partial' ? 'partial-failure' : execution.status === 'failed' ? 'max-retry-reached' : 'error',
+        )
+      }
+    }
+    job.updatedAt = new Date().toISOString()
+    results.push({
+      id: job.id,
+      status: job.status,
+      processed: job.processed,
+      total: job.total,
+      errorCount: job.errorCount,
+    })
+  }
+  db.courseManagementJobs = jobs
+  return results
+}
 const isBcryptHash = (value) => typeof value === 'string' && value.startsWith('$2')
 const hashPassword = (value) => bcrypt.hash(value, BCRYPT_ROUNDS)
 const shuffle = (list) => {
@@ -808,7 +1570,9 @@ const createDefaultDb = () => {
     users: deepClone(defaultUsers),
     credentials,
     permissionMatrix: deepClone(defaultPermissionMatrix),
+    courseManagementPermissions: deepClone(defaultCourseManagementPermissionMatrix),
     courses: deepClone(defaultCourseCatalog),
+    courseManagement: [],
     quizzes: deepClone(defaultQuizCatalog),
     quizAttempts: {},
     quizSessions: {},
@@ -818,8 +1582,21 @@ const createDefaultDb = () => {
     courseProgress: {},
     lessonNotes: {},
     discussions: {},
+    courseManagementJobs: [],
+    courseManagementJobDlq: [],
+    jobWorkerLease: null,
     profiles,
     revokedTokens: [],
+    telemetryEvents: [],
+    notificationChannels: {
+      webhookEnabled: false,
+      webhookUrl: '',
+      emailEnabled: false,
+      emailFrom: 'no-reply@curiosity.app',
+    },
+    notificationDeliveryLogs: [],
+    webhookReplayNonces: {},
+    immutableAuditLogs: [],
     auditLogs: [
       {
         id: `audit-${Math.random().toString(36).slice(2, 9)}`,
@@ -841,7 +1618,13 @@ const hydrateDb = (db) => {
   const next = { ...db }
   next.users = Array.isArray(next.users) ? next.users : deepClone(defaultUsers)
   next.permissionMatrix = next.permissionMatrix || deepClone(defaultPermissionMatrix)
+  next.courseManagementPermissions = normalizeCourseManagementPermissionMatrix(next.courseManagementPermissions || defaultCourseManagementPermissionMatrix)
   next.courses = Array.isArray(next.courses) ? next.courses : deepClone(defaultCourseCatalog)
+  next.courseManagement = (Array.isArray(next.courseManagement) ? next.courseManagement : []).map((course) => ({
+    ...course,
+    version: Math.max(1, Number(course?.version || 1)),
+    revisions: Array.isArray(course?.revisions) ? course.revisions : [],
+  }))
   next.quizzes = (Array.isArray(next.quizzes) ? next.quizzes : deepClone(defaultQuizCatalog)).map((quiz) => ({
     ...quiz,
     status: quiz.status || 'published',
@@ -854,8 +1637,30 @@ const hydrateDb = (db) => {
   next.courseProgress = next.courseProgress || {}
   next.lessonNotes = next.lessonNotes || {}
   next.discussions = next.discussions || {}
+  next.courseManagementJobs = Array.isArray(next.courseManagementJobs) ? next.courseManagementJobs : []
+  next.courseManagementJobDlq = Array.isArray(next.courseManagementJobDlq) ? next.courseManagementJobDlq : []
+  next.jobWorkerLease = next.jobWorkerLease && typeof next.jobWorkerLease === 'object' ? next.jobWorkerLease : null
   next.profiles = next.profiles || {}
   next.revokedTokens = Array.isArray(next.revokedTokens) ? next.revokedTokens : []
+  next.telemetryEvents = Array.isArray(next.telemetryEvents) ? next.telemetryEvents : []
+  next.notificationChannels =
+    next.notificationChannels && typeof next.notificationChannels === 'object'
+      ? {
+          webhookEnabled: Boolean(next.notificationChannels.webhookEnabled),
+          webhookUrl: String(next.notificationChannels.webhookUrl || ''),
+          emailEnabled: Boolean(next.notificationChannels.emailEnabled),
+          emailFrom: String(next.notificationChannels.emailFrom || 'no-reply@curiosity.app'),
+        }
+      : {
+          webhookEnabled: false,
+          webhookUrl: '',
+          emailEnabled: false,
+          emailFrom: 'no-reply@curiosity.app',
+        }
+  next.notificationDeliveryLogs = Array.isArray(next.notificationDeliveryLogs) ? next.notificationDeliveryLogs : []
+  next.webhookReplayNonces =
+    next.webhookReplayNonces && typeof next.webhookReplayNonces === 'object' ? next.webhookReplayNonces : {}
+  next.immutableAuditLogs = Array.isArray(next.immutableAuditLogs) ? next.immutableAuditLogs : []
   next.auditLogs = Array.isArray(next.auditLogs) ? next.auditLogs : []
   next.credentials = next.credentials || {}
 
@@ -902,17 +1707,53 @@ const toSafeUser = (user) => ({
 })
 
 const addAuditLog = (db, { actor, action, target, detail }) => {
-  db.auditLogs = [
+  const entry = {
+    id: `audit-${Math.random().toString(36).slice(2, 9)}`,
+    actor,
+    action,
+    target,
+    detail,
+    timestamp: nowStamp(),
+  }
+  db.auditLogs = [entry, ...(db.auditLogs || [])].slice(0, 400)
+  const previousHash = db.immutableAuditLogs?.[0]?.hash || 'genesis'
+  const immutableSeed = {
+    id: entry.id,
+    actor: String(entry.actor || ''),
+    action: String(entry.action || ''),
+    target: String(entry.target || ''),
+    detail: String(entry.detail || ''),
+    timestamp: String(entry.timestamp || ''),
+    prevHash: previousHash,
+  }
+  const hash = createHash('sha256').update(JSON.stringify(immutableSeed)).digest('hex')
+  db.immutableAuditLogs = [
     {
-      id: `audit-${Math.random().toString(36).slice(2, 9)}`,
-      actor,
-      action,
-      target,
-      detail,
-      timestamp: nowStamp(),
+      ...immutableSeed,
+      hash,
+      createdAt: new Date().toISOString(),
     },
-    ...(db.auditLogs || []),
-  ].slice(0, 400)
+    ...(db.immutableAuditLogs || []),
+  ].slice(0, 4000)
+}
+
+const addTelemetryEvent = (db, payload, user) => {
+  const nowIso = new Date().toISOString()
+  db.telemetryEvents = [
+    {
+      id: `evt-${Math.random().toString(36).slice(2, 10)}`,
+      domain: String(payload?.domain || 'app'),
+      action: String(payload?.action || 'unknown'),
+      severity: String(payload?.severity || 'info'),
+      message: String(payload?.message || ''),
+      context: payload?.context && typeof payload.context === 'object' ? payload.context : {},
+      meta: payload?.meta && typeof payload.meta === 'object' ? payload.meta : {},
+      actorId: user?.id || '',
+      actorEmail: user?.email || '',
+      createdAt: nowIso,
+    },
+    ...(Array.isArray(db.telemetryEvents) ? db.telemetryEvents : []),
+  ].slice(0, 1000)
 }
 
 const checkPasswordAndUpgrade = async (db, email, plainPassword) => {
@@ -1950,6 +2791,21 @@ const requireQuizManager = (req, res, next) => {
   return next()
 }
 
+const requireCourseManager = (req, res, next) => {
+  if (!canReviewAssignmentRole(req.db, req.user)) {
+    return res.status(403).json({ message: 'Course manager access required.' })
+  }
+  return next()
+}
+
+const requireCoursePermission = (permissionKey) => (req, res, next) => {
+  const permissions = getCourseManagementPermissionsForUser(req.db, req.user)
+  if (!permissions?.[permissionKey]) {
+    return res.status(403).json({ message: `Course management permission "${permissionKey}" required.` })
+  }
+  return next()
+}
+
 app.post('/api/auth/login', loginLimiter, validateBody(loginSchema), async (req, res) => {
   const email = normalizeEmail(req.body.email)
   const password = req.body.password
@@ -2410,6 +3266,417 @@ app.get('/api/uploads/:uploadId/url', requireAuth, async (req, res) => {
     requiresAuth: false,
     expiresInSec: Math.max(60, Math.min(S3_SIGNED_URL_EXPIRES_SEC, 60 * 60)),
   })
+})
+
+app.get('/api/course-management/permissions', requireAuth, requireCourseManager, requireCoursePermission('view'), async (req, res) => {
+  return res.json(getCourseManagementPermissionsForUser(req.db, req.user))
+})
+
+app.get('/api/course-management/permissions/matrix', requireAuth, requireAdmin, async (req, res) => {
+  return res.json(normalizeCourseManagementPermissionMatrix(req.db.courseManagementPermissions))
+})
+
+app.put('/api/course-management/permissions/matrix', requireAuth, requireAdmin, validateBody(courseManagementPermissionMatrixSchema), async (req, res) => {
+  req.db.courseManagementPermissions = normalizeCourseManagementPermissionMatrix(req.body)
+  addAuditLog(req.db, {
+    actor: req.user.email,
+    action: 'course_mgmt_permissions_update',
+    target: 'course_management_permission_matrix',
+    detail: 'Course management permission matrix updated.',
+  })
+  await writeDb(req.db)
+  return res.json(req.db.courseManagementPermissions)
+})
+
+app.get('/api/course-management', requireAuth, requireCourseManager, requireCoursePermission('view'), async (req, res) => {
+  const items = Array.isArray(req.db.courseManagement) ? req.db.courseManagement : []
+  const sorted = items
+    .slice()
+    .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+  return res.json(sorted)
+})
+
+app.post('/api/course-management', requireAuth, requireCourseManager, validateBody(courseManagementSaveSchema), async (req, res) => {
+  const payload = normalizeCourseManagementPayload(req.body)
+  const courses = Array.isArray(req.db.courseManagement) ? req.db.courseManagement.slice() : []
+  const nowIso = new Date().toISOString()
+  const isUpdate = Boolean(payload.id) && courses.some((item) => item.id === payload.id)
+  if (isUpdate && !getCourseManagementPermissionsForUser(req.db, req.user).edit) {
+    return res.status(403).json({ message: 'Course management permission "edit" required.' })
+  }
+  if (!isUpdate && !getCourseManagementPermissionsForUser(req.db, req.user).create) {
+    return res.status(403).json({ message: 'Course management permission "create" required.' })
+  }
+  const targetId = payload.id || `course-${Math.random().toString(36).slice(2, 9)}`
+  const existing = courses.find((item) => item.id === targetId) || null
+  const sameSlug = courses.find((item) => item.id !== targetId && toSlug(item.slug) === toSlug(payload.slug))
+  if (sameSlug) {
+    return res.status(409).json({ message: 'Slug sudah digunakan course lain.' })
+  }
+
+  if (isUpdate) {
+    if (!Number.isFinite(Number(req.body.version))) {
+      return res.status(409).json({
+        message: 'Course version is required for update.',
+        latest: existing,
+      })
+    }
+    if (Number(existing?.version || 1) !== Number(req.body.version)) {
+      return res.status(409).json({
+        message: 'Course has changed on server. Refresh data first.',
+        latest: existing,
+      })
+    }
+  }
+
+  const nextCourse = {
+    ...payload,
+    id: targetId,
+    version: isUpdate ? Number(existing?.version || 1) + 1 : 1,
+    createdAt: existing?.createdAt || nowIso,
+    updatedAt: nowIso,
+    revisions: Array.isArray(existing?.revisions) ? existing.revisions : [],
+  }
+  if (nextCourse.publishAt || nextCourse.unpublishAt) {
+    if (!getCourseManagementPermissionsForUser(req.db, req.user).schedule) {
+      return res.status(403).json({ message: 'Course management permission "schedule" required.' })
+    }
+  }
+  if (nextCourse.status === 'published' || nextCourse.status === 'scheduled') {
+    if (!getCourseManagementPermissionsForUser(req.db, req.user).publish) {
+      return res.status(403).json({ message: 'Course management permission "publish" required.' })
+    }
+  }
+  const peerCourses = courses.filter((item) => item.id !== targetId)
+  const validation = validateCourseManagementIntegrity(nextCourse, [...peerCourses, nextCourse])
+  if (validation.hasIntegrityError) {
+    return res.status(422).json({
+      message: 'Course integrity validation failed.',
+      errors: validation.checks.filter((item) => !item.passed).map((item) => item.id),
+      cyclePath: validation.cyclePath,
+      invalidPrerequisites: validation.invalidPrerequisites,
+    })
+  }
+  if (nextCourse.status === 'published' || nextCourse.status === 'scheduled') {
+    if (validation.hasPublishGap) {
+      return res.status(422).json({
+        message: 'Course belum memenuhi publish checklist.',
+        errors: validation.publishChecks.filter((item) => !item.passed).map((item) => item.id),
+      })
+    }
+  }
+  if (isUpdate && existing) {
+    nextCourse.revisions = [buildCourseRevisionEntry(existing, 'updated', req.user.email), ...(existing.revisions || [])].slice(0, 40)
+  } else if (!isUpdate) {
+    nextCourse.revisions = [buildCourseRevisionEntry(nextCourse, 'created', req.user.email)]
+  }
+
+  req.db.courseManagement = isUpdate ? courses.map((item) => (item.id === targetId ? nextCourse : item)) : [nextCourse, ...courses]
+  addAuditLog(req.db, {
+    actor: req.user.email,
+    action: isUpdate ? 'course_mgmt_update' : 'course_mgmt_create',
+    target: nextCourse.id,
+    detail: `${isUpdate ? 'Updated' : 'Created'} managed course ${nextCourse.title}.`,
+  })
+  await writeDb(req.db)
+  return res.json(nextCourse)
+})
+
+app.get('/api/course-management/:id/revisions', requireAuth, requireCourseManager, requireCoursePermission('history'), async (req, res) => {
+  const target = (req.db.courseManagement || []).find((item) => item.id === req.params.id)
+  if (!target) return res.status(404).json({ message: 'Course not found.' })
+  return res.json(Array.isArray(target.revisions) ? target.revisions : [])
+})
+
+app.post('/api/course-management/:id/revisions/:revisionId/restore', requireAuth, requireCourseManager, requireCoursePermission('restoreRevision'), async (req, res) => {
+  const courses = Array.isArray(req.db.courseManagement) ? req.db.courseManagement.slice() : []
+  const target = courses.find((item) => item.id === req.params.id)
+  if (!target) return res.status(404).json({ message: 'Course not found.' })
+  const revisions = Array.isArray(target.revisions) ? target.revisions : []
+  const revision = revisions.find((item) => item.id === req.params.revisionId)
+  if (!revision || !revision.snapshot) {
+    return res.status(404).json({ message: 'Revision not found.' })
+  }
+  const restored = normalizeCourseManagementPayload({
+    ...revision.snapshot,
+    id: target.id,
+  })
+  const nextCourse = {
+    ...restored,
+    id: target.id,
+    version: Number(target.version || 1) + 1,
+    createdAt: target.createdAt || restored.createdAt,
+    updatedAt: new Date().toISOString(),
+    revisions: [buildCourseRevisionEntry(target, `restore:${revision.id}`, req.user.email), ...revisions].slice(0, 40),
+  }
+  const validation = validateCourseManagementIntegrity(nextCourse, courses.map((item) => (item.id === nextCourse.id ? nextCourse : item)))
+  if (validation.hasIntegrityError || (['published', 'scheduled'].includes(nextCourse.status) && validation.hasPublishGap)) {
+    return res.status(422).json({
+      message: 'Restored revision tidak valid untuk kondisi saat ini.',
+      errors: validation.publishChecks.filter((item) => !item.passed).map((item) => item.id),
+      cyclePath: validation.cyclePath,
+      invalidPrerequisites: validation.invalidPrerequisites,
+    })
+  }
+  req.db.courseManagement = courses.map((item) => (item.id === nextCourse.id ? nextCourse : item))
+  addAuditLog(req.db, {
+    actor: req.user.email,
+    action: 'course_mgmt_restore_revision',
+    target: nextCourse.id,
+    detail: `Restored managed course from revision ${revision.id}.`,
+  })
+  await writeDb(req.db)
+  return res.json(nextCourse)
+})
+
+app.patch('/api/course-management/:id/status', requireAuth, requireCourseManager, validateBody(courseManagementStatusPatchSchema), async (req, res) => {
+  const courses = Array.isArray(req.db.courseManagement) ? req.db.courseManagement.slice() : []
+  const target = courses.find((item) => item.id === req.params.id)
+  if (!target) return res.status(404).json({ message: 'Course not found.' })
+  const permissions = getCourseManagementPermissionsForUser(req.db, req.user)
+  if (req.body.status === 'published' || req.body.status === 'scheduled') {
+    if (!permissions.publish) {
+      return res.status(403).json({ message: 'Course management permission "publish" required.' })
+    }
+  } else if (!permissions.edit) {
+    return res.status(403).json({ message: 'Course management permission "edit" required.' })
+  }
+  if (!Number.isFinite(Number(req.body.version))) {
+    return res.status(409).json({
+      message: 'Course version is required for status update.',
+      latest: target,
+    })
+  }
+  if (Number(target.version || 1) !== Number(req.body.version)) {
+    return res.status(409).json({
+      message: 'Course has changed on server. Refresh data first.',
+      latest: target,
+    })
+  }
+  const nextCourse = {
+    ...target,
+    status: req.body.status,
+    version: Number(target.version || 1) + 1,
+    updatedAt: new Date().toISOString(),
+    revisions: [buildCourseRevisionEntry(target, `status:${req.body.status}`, req.user.email), ...(target.revisions || [])].slice(0, 40),
+  }
+  const validation = validateCourseManagementIntegrity(nextCourse, courses.map((item) => (item.id === nextCourse.id ? nextCourse : item)))
+  if (nextCourse.status === 'published' || nextCourse.status === 'scheduled') {
+    if (validation.hasPublishGap || validation.hasIntegrityError) {
+      return res.status(422).json({
+        message: 'Course belum memenuhi publish checklist.',
+        errors: validation.publishChecks.filter((item) => !item.passed).map((item) => item.id),
+      })
+    }
+  }
+  req.db.courseManagement = courses.map((item) => (item.id === nextCourse.id ? nextCourse : item))
+  addAuditLog(req.db, {
+    actor: req.user.email,
+    action: 'course_mgmt_status',
+    target: nextCourse.id,
+    detail: `Course status changed to ${nextCourse.status}.`,
+  })
+  await writeDb(req.db)
+  return res.json(nextCourse)
+})
+
+app.delete('/api/course-management/:id', requireAuth, requireCourseManager, requireCoursePermission('delete'), async (req, res) => {
+  const courses = Array.isArray(req.db.courseManagement) ? req.db.courseManagement.slice() : []
+  const target = courses.find((item) => item.id === req.params.id)
+  if (!target) return res.status(404).json({ message: 'Course not found.' })
+  req.db.courseManagement = courses.filter((item) => item.id !== req.params.id)
+  addAuditLog(req.db, {
+    actor: req.user.email,
+    action: 'course_mgmt_delete',
+    target: target.id,
+    detail: `Deleted managed course ${target.title}.`,
+  })
+  await writeDb(req.db)
+  return res.status(204).send()
+})
+
+app.post('/api/course-management/:id/duplicate', requireAuth, requireCourseManager, requireCoursePermission('duplicate'), async (req, res) => {
+  const courses = Array.isArray(req.db.courseManagement) ? req.db.courseManagement.slice() : []
+  const source = courses.find((item) => item.id === req.params.id)
+  if (!source) return res.status(404).json({ message: 'Course not found.' })
+  const nowIso = new Date().toISOString()
+  const existingSlugs = new Set(courses.map((item) => toSlug(item.slug)))
+  let nextSlug = `${toSlug(source.slug || source.title)}-copy`
+  let counter = 2
+  while (existingSlugs.has(nextSlug)) {
+    nextSlug = `${toSlug(source.slug || source.title)}-copy-${counter}`
+    counter += 1
+  }
+  const duplicated = {
+    ...deepClone(source),
+    id: `course-${Math.random().toString(36).slice(2, 9)}`,
+    title: `${source.title || source.id} (Copy)`,
+    slug: nextSlug,
+    status: 'draft',
+    publishAt: '',
+    unpublishAt: '',
+    version: 1,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+    revisions: [buildCourseRevisionEntry(source, 'duplicated', req.user.email)],
+  }
+  req.db.courseManagement = [duplicated, ...courses]
+  addAuditLog(req.db, {
+    actor: req.user.email,
+    action: 'course_mgmt_duplicate',
+    target: duplicated.id,
+    detail: `Duplicated managed course from ${source.id}.`,
+  })
+  await writeDb(req.db)
+  return res.status(201).json(duplicated)
+})
+
+app.get('/api/course-management/:id/compliance-export', requireAuth, requireCourseManager, requireCoursePermission('history'), async (req, res) => {
+  const target = (req.db.courseManagement || []).find((item) => item.id === req.params.id)
+  if (!target) return res.status(404).json({ message: 'Course not found.' })
+  const immutableVerify = verifyImmutableAuditChain(req.db.immutableAuditLogs || [])
+  const relatedAudit = (req.db.auditLogs || []).filter((item) => String(item.target || '').includes(target.id))
+  const relatedJobs = (req.db.courseManagementJobs || []).filter((item) => Array.isArray(item.ids) && item.ids.includes(target.id))
+  const relatedDlq = (req.db.courseManagementJobDlq || []).filter(
+    (item) => Array.isArray(item?.snapshot?.ids) && item.snapshot.ids.includes(target.id),
+  )
+  const relatedTelemetry = (req.db.telemetryEvents || []).filter((item) => item?.context?.courseId === target.id)
+  const bundle = {
+    schemaVersion: '1.0',
+    generatedAt: new Date().toISOString(),
+    generatedBy: req.user.email,
+    course: target,
+    revisions: Array.isArray(target.revisions) ? target.revisions : [],
+    audit: {
+      mutable: relatedAudit,
+      immutableVerify,
+      immutableSample: (req.db.immutableAuditLogs || []).slice(0, 120),
+    },
+    operations: {
+      queue: relatedJobs,
+      dlq: relatedDlq,
+      telemetry: relatedTelemetry,
+    },
+    notifications: {
+      channels: req.db.notificationChannels || {},
+      deliveryLogs: (req.db.notificationDeliveryLogs || []).slice(0, 200),
+    },
+  }
+  res.setHeader('Content-Type', 'application/json; charset=utf-8')
+  res.setHeader('Content-Disposition', `attachment; filename="${target.id}-compliance-export.json"`)
+  return res.json(bundle)
+})
+
+app.get('/api/course-management/jobs', requireAuth, requireCourseManager, requireCoursePermission('bulk'), async (req, res) => {
+  const rawLimit = Number(req.query.limit || 100)
+  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 500) : 100
+  return res.json((req.db.courseManagementJobs || []).slice(0, limit))
+})
+
+app.get('/api/course-management/jobs/worker-lease', requireAuth, requireCourseManager, requireCoursePermission('bulk'), async (req, res) => {
+  return res.json(req.db.jobWorkerLease || null)
+})
+
+app.post('/api/course-management/jobs', requireAuth, requireCourseManager, requireCoursePermission('bulk'), validateBody(courseManagementJobCreateSchema), async (req, res) => {
+  const item = createCourseManagementJob(req.body, req.user.email)
+  req.db.courseManagementJobs = [item, ...(req.db.courseManagementJobs || [])].slice(0, 1000)
+  addAuditLog(req.db, {
+    actor: req.user.email,
+    action: 'course_mgmt_job_enqueue',
+    target: item.id,
+    detail: `Queued course management job ${item.type}.`,
+  })
+  await writeDb(req.db)
+  return res.status(201).json(item)
+})
+
+app.post('/api/course-management/jobs/process-due', requireAuth, requireCourseManager, requireCoursePermission('bulk'), async (req, res) => {
+  const leaseOwner = `manual:${req.user.id}:${Math.random().toString(36).slice(2, 7)}`
+  const lease = acquireCourseJobWorkerLease(req.db, leaseOwner)
+  if (!lease.acquired) {
+    return res.status(423).json({
+      message: 'Job worker is locked by another instance.',
+      lease: lease.lease || null,
+    })
+  }
+  let results = []
+  try {
+    results = processDueCourseManagementJobs(req.db, req.user.email, 5)
+  } finally {
+    releaseCourseJobWorkerLease(req.db, leaseOwner)
+  }
+  await writeDb(req.db)
+  return res.json({
+    processedJobs: results.length,
+    results,
+    leaseReleased: true,
+  })
+})
+
+app.post('/api/course-management/jobs/:id/run', requireAuth, requireCourseManager, requireCoursePermission('bulk'), async (req, res) => {
+  const jobs = Array.isArray(req.db.courseManagementJobs) ? req.db.courseManagementJobs : []
+  const target = jobs.find((item) => item.id === req.params.id)
+  if (!target) return res.status(404).json({ message: 'Job not found.' })
+  const leaseOwner = `manual-single:${req.user.id}:${Math.random().toString(36).slice(2, 7)}`
+  const lease = acquireCourseJobWorkerLease(req.db, leaseOwner)
+  if (!lease.acquired) {
+    return res.status(423).json({
+      message: 'Job worker is locked by another instance.',
+      lease: lease.lease || null,
+    })
+  }
+  target.status = 'pending'
+  target.nextRunAt = ''
+  let results = []
+  try {
+    results = processDueCourseManagementJobs(req.db, req.user.email, 1)
+  } finally {
+    releaseCourseJobWorkerLease(req.db, leaseOwner)
+  }
+  await writeDb(req.db)
+  return res.json(results[0] || { id: target.id, status: target.status })
+})
+
+app.delete('/api/course-management/jobs/:id', requireAuth, requireCourseManager, requireCoursePermission('bulk'), async (req, res) => {
+  const jobs = Array.isArray(req.db.courseManagementJobs) ? req.db.courseManagementJobs : []
+  const exists = jobs.some((item) => item.id === req.params.id)
+  if (!exists) return res.status(404).json({ message: 'Job not found.' })
+  req.db.courseManagementJobs = jobs.filter((item) => item.id !== req.params.id)
+  await writeDb(req.db)
+  return res.status(204).send()
+})
+
+app.get('/api/course-management/jobs/dlq', requireAuth, requireCourseManager, requireCoursePermission('bulk'), async (req, res) => {
+  const rawLimit = Number(req.query.limit || 100)
+  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 500) : 100
+  return res.json((req.db.courseManagementJobDlq || []).slice(0, limit))
+})
+
+app.post('/api/course-management/jobs/dlq/:id/redrive', requireAuth, requireCourseManager, requireCoursePermission('bulk'), async (req, res) => {
+  const dlqItems = Array.isArray(req.db.courseManagementJobDlq) ? req.db.courseManagementJobDlq : []
+  const target = dlqItems.find((item) => item.id === req.params.id)
+  if (!target) return res.status(404).json({ message: 'DLQ item not found.' })
+  const snapshot = target.snapshot || {}
+  const queued = createCourseManagementJob(
+    {
+      type: snapshot.type,
+      ids: Array.isArray(snapshot.ids) ? snapshot.ids : [],
+      statusValue: snapshot.statusValue || '',
+    },
+    req.user.email,
+  )
+  req.db.courseManagementJobs = [queued, ...(req.db.courseManagementJobs || [])].slice(0, 1000)
+  target.status = 'redriven'
+  target.redriveCount = Number(target.redriveCount || 0) + 1
+  target.redrivenAt = new Date().toISOString()
+  addAuditLog(req.db, {
+    actor: req.user.email,
+    action: 'course_mgmt_job_redrive',
+    target: target.id,
+    detail: `Redrive DLQ item ${target.id} as job ${queued.id}.`,
+  })
+  await writeDb(req.db)
+  return res.status(201).json({ queued, dlq: target })
 })
 
 app.get('/api/courses', requireAuth, async (req, res) => {
@@ -3326,10 +4593,236 @@ app.get('/api/notifications', requireAuth, async (req, res) => {
   return res.json(activities)
 })
 
+app.get('/api/notifications/channels', requireAuth, requireAdmin, async (req, res) => {
+  return res.json({
+    ...(req.db.notificationChannels || { webhookEnabled: false, webhookUrl: '', emailEnabled: false, emailFrom: 'no-reply@curiosity.app' }),
+    emailProviderMode: EMAIL_PROVIDER_MODE,
+    emailProviderWebhookConfigured: Boolean(EMAIL_PROVIDER_WEBHOOK_URL),
+  })
+})
+
+app.put('/api/notifications/channels', requireAuth, requireAdmin, validateBody(notificationChannelConfigSchema), async (req, res) => {
+  req.db.notificationChannels = {
+    webhookEnabled: Boolean(req.body.webhookEnabled),
+    webhookUrl: String(req.body.webhookUrl || ''),
+    emailEnabled: Boolean(req.body.emailEnabled),
+    emailFrom: String(req.body.emailFrom || 'no-reply@curiosity.app'),
+  }
+  addAuditLog(req.db, {
+    actor: req.user.email,
+    action: 'notification_channels_update',
+    target: 'notification_channels',
+    detail: 'Updated notification delivery channels.',
+  })
+  await writeDb(req.db)
+  return res.json(req.db.notificationChannels)
+})
+
+app.post('/api/notifications/test-delivery', requireAuth, requireAdmin, validateBody(notificationTestDeliverySchema), async (req, res) => {
+  const channels = req.db.notificationChannels || {}
+  const channel = req.body.channel
+  const message = String(req.body.message || '').trim()
+  const createdAt = new Date().toISOString()
+  const item = {
+    id: `delivery-${Math.random().toString(36).slice(2, 10)}`,
+    channel,
+    message,
+    status: 'queued',
+    target: channel === 'webhook' ? String(channels.webhookUrl || '') : String(channels.emailFrom || ''),
+    actorEmail: req.user.email,
+    createdAt,
+    responseStatus: null,
+    responseBody: '',
+  }
+
+  if (channel === 'webhook') {
+    const enabled = Boolean(channels.webhookEnabled && channels.webhookUrl)
+    if (!enabled) {
+      item.status = 'skipped'
+      item.responseBody = 'Webhook channel disabled or URL missing.'
+    } else {
+      try {
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), EMAIL_PROVIDER_TIMEOUT_MS)
+        const payload = {
+          event: 'curiosity.notification.test',
+          message,
+          triggeredAt: createdAt,
+          actor: req.user.email,
+        }
+        const bodyText = JSON.stringify(payload)
+        const nonce = `nonce-${Math.random().toString(36).slice(2, 11)}`
+        const signature = buildWebhookSignature(NOTIFICATION_WEBHOOK_SECRET, createdAt, bodyText)
+        const response = await fetch(channels.webhookUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(signature ? { 'X-Curiosity-Signature': signature } : {}),
+            'X-Curiosity-Timestamp': createdAt,
+            'X-Curiosity-Nonce': nonce,
+          },
+          body: bodyText,
+          signal: controller.signal,
+        })
+        clearTimeout(timeoutId)
+        item.responseStatus = response.status
+        item.responseBody = await response.text()
+        item.status = response.ok ? 'delivered' : 'failed'
+      } catch (error) {
+        item.status = 'failed'
+        item.responseBody = error?.message || 'Webhook delivery failed.'
+      }
+    }
+  } else {
+    const enabled = Boolean(channels.emailEnabled)
+    if (!enabled) {
+      item.status = 'skipped'
+      item.responseBody = 'Email channel disabled.'
+    } else {
+      if (EMAIL_PROVIDER_MODE === 'webhook') {
+        if (!EMAIL_PROVIDER_WEBHOOK_URL) {
+          item.status = 'failed'
+          item.responseBody = 'EMAIL_PROVIDER_WEBHOOK_URL not configured.'
+        } else {
+          try {
+            const controller = new AbortController()
+            const timeoutId = setTimeout(() => controller.abort(), EMAIL_PROVIDER_TIMEOUT_MS)
+            const payload = {
+              event: 'curiosity.notification.email-test',
+              from: String(channels.emailFrom || 'no-reply@curiosity.app'),
+              to: req.user.email,
+              subject: 'Curiosity LMS test email delivery',
+              text: message,
+              sentAt: createdAt,
+            }
+            const bodyText = JSON.stringify(payload)
+            const signature = buildWebhookSignature(NOTIFICATION_WEBHOOK_SECRET, createdAt, bodyText)
+            const response = await fetch(EMAIL_PROVIDER_WEBHOOK_URL, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                ...(EMAIL_PROVIDER_API_KEY ? { Authorization: `Bearer ${EMAIL_PROVIDER_API_KEY}` } : {}),
+                ...(signature ? { 'X-Curiosity-Signature': signature } : {}),
+                'X-Curiosity-Timestamp': createdAt,
+              },
+              body: bodyText,
+              signal: controller.signal,
+            })
+            clearTimeout(timeoutId)
+            item.responseStatus = response.status
+            item.responseBody = await response.text()
+            item.status = response.ok ? 'delivered' : 'failed'
+          } catch (error) {
+            item.status = 'failed'
+            item.responseBody = error?.message || 'Email provider delivery failed.'
+          }
+        }
+      } else {
+        item.status = 'queued'
+        item.responseBody = 'Email delivery queued (simulation).'
+      }
+    }
+  }
+
+  req.db.notificationDeliveryLogs = [item, ...(req.db.notificationDeliveryLogs || [])].slice(0, 1000)
+  addAuditLog(req.db, {
+    actor: req.user.email,
+    action: 'notification_test_delivery',
+    target: channel,
+    detail: `Test delivery ${item.status}.`,
+  })
+  await writeDb(req.db)
+  return res.json(item)
+})
+
+app.post('/api/notifications/webhook/ingest', validateBody(webhookIngestSchema), async (req, res) => {
+  if (!NOTIFICATION_WEBHOOK_SECRET) {
+    return res.status(503).json({ message: 'Webhook secret is not configured.' })
+  }
+  const signature = String(req.headers['x-curiosity-signature'] || '')
+  const timestampRaw = String(req.headers['x-curiosity-timestamp'] || '')
+  const nonce = String(req.headers['x-curiosity-nonce'] || '').trim()
+  if (!signature || !timestampRaw || !nonce) {
+    return res.status(401).json({ message: 'Missing signature headers.' })
+  }
+  const timestampMs = parseWebhookTimestampMs(timestampRaw)
+  if (!Number.isFinite(timestampMs)) {
+    return res.status(401).json({ message: 'Invalid webhook timestamp.' })
+  }
+  const toleranceMs = Math.max(1, WEBHOOK_SIGNATURE_TOLERANCE_SEC) * 1000
+  if (Math.abs(Date.now() - timestampMs) > toleranceMs) {
+    return res.status(401).json({ message: 'Webhook timestamp expired.' })
+  }
+  req.db.webhookReplayNonces = req.db.webhookReplayNonces && typeof req.db.webhookReplayNonces === 'object' ? req.db.webhookReplayNonces : {}
+  const existingNonceTime = Number(req.db.webhookReplayNonces[nonce] || 0)
+  if (Number.isFinite(existingNonceTime) && existingNonceTime > Date.now()) {
+    return res.status(409).json({ message: 'Webhook replay detected.' })
+  }
+  const bodyText = JSON.stringify(req.body || {})
+  const expected = buildWebhookSignature(NOTIFICATION_WEBHOOK_SECRET, timestampRaw, bodyText)
+  if (!secureTextEqual(expected, signature)) {
+    return res.status(401).json({ message: 'Invalid webhook signature.' })
+  }
+  req.db.webhookReplayNonces[nonce] = Date.now() + toleranceMs * 2
+  const nonceEntries = Object.entries(req.db.webhookReplayNonces)
+    .filter(([, expiresAt]) => Number(expiresAt) > Date.now())
+    .slice(0, MAX_WEBHOOK_REPLAY_NONCES)
+  req.db.webhookReplayNonces = Object.fromEntries(nonceEntries)
+
+  const item = {
+    id: `delivery-${Math.random().toString(36).slice(2, 10)}`,
+    channel: 'webhook-inbound',
+    message: String(req.body?.message || ''),
+    status: 'accepted',
+    target: String(req.body?.event || 'incoming-event'),
+    actorEmail: 'external-webhook',
+    createdAt: new Date().toISOString(),
+    responseStatus: 202,
+    responseBody: 'accepted',
+  }
+  req.db.notificationDeliveryLogs = [item, ...(req.db.notificationDeliveryLogs || [])].slice(0, 1000)
+  addAuditLog(req.db, {
+    actor: 'external-webhook',
+    action: 'notification_webhook_ingest',
+    target: String(req.body?.event || 'event'),
+    detail: `Accepted webhook event ${String(req.body?.event || 'unknown')}.`,
+  })
+  await writeDb(req.db)
+  return res.status(202).json({ ok: true, receivedAt: item.createdAt })
+})
+
+app.get('/api/notifications/delivery-logs', requireAuth, requireAdmin, async (req, res) => {
+  const rawLimit = Number(req.query.limit || 100)
+  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 500) : 100
+  return res.json((req.db.notificationDeliveryLogs || []).slice(0, limit))
+})
+
 app.get('/api/audit-logs', requireAuth, requireAdmin, async (req, res) => {
   const rawLimit = Number(req.query.limit || 100)
   const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 300) : 100
   return res.json((req.db.auditLogs || []).slice(0, limit))
+})
+
+app.get('/api/audit-logs/immutable', requireAuth, requireAdmin, async (req, res) => {
+  const rawLimit = Number(req.query.limit || 100)
+  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 1000) : 100
+  return res.json((req.db.immutableAuditLogs || []).slice(0, limit))
+})
+
+app.get('/api/audit-logs/immutable/verify', requireAuth, requireAdmin, async (req, res) => {
+  return res.json(verifyImmutableAuditChain(req.db.immutableAuditLogs || []))
+})
+
+app.post('/api/telemetry/events', requireAuth, validateBody(telemetryEventSchema), async (req, res) => {
+  addTelemetryEvent(req.db, req.body, req.user)
+  await writeDb(req.db)
+  return res.status(202).json({ ok: true })
+})
+
+app.get('/api/telemetry/events', requireAuth, requireAdmin, async (req, res) => {
+  const rawLimit = Number(req.query.limit || 100)
+  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 500) : 100
+  return res.json((req.db.telemetryEvents || []).slice(0, limit))
 })
 
 app.use('/api/*splat', (_req, res) => {
@@ -3340,9 +4833,38 @@ app.use(handleAppError)
 
 const start = async () => {
   await ensureDb()
-  return app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.log(`Curiosity API listening on http://localhost:${PORT}/api`)
   })
+  const schedulerWorkerId = `scheduler:${process.pid}`
+  let jobWorkerBusy = false
+  const jobWorkerTimer = setInterval(async () => {
+    if (jobWorkerBusy) return
+    jobWorkerBusy = true
+    try {
+      const db = await readDb()
+      const lease = acquireCourseJobWorkerLease(db, schedulerWorkerId)
+      if (lease.acquired) {
+        await writeDb(db)
+        try {
+          processDueCourseManagementJobs(db, 'scheduler', 3)
+        } finally {
+          releaseCourseJobWorkerLease(db, schedulerWorkerId)
+        }
+        await writeDb(db)
+      }
+    } catch {
+      // swallow scheduler errors
+    } finally {
+      jobWorkerBusy = false
+    }
+  }, 5000)
+  if (server && typeof server.on === 'function') {
+    server.on('close', () => {
+      clearInterval(jobWorkerTimer)
+    })
+  }
+  return server
 }
 
 /* c8 ignore start */

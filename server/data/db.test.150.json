@@ -1,0 +1,733 @@
+{
+  "users": [
+    {
+      "id": "u-001",
+      "name": "Indra Permana",
+      "email": "indra@curiosity.app",
+      "role": "admin",
+      "status": "active",
+      "lastLogin": "2026-03-09 08:20"
+    },
+    {
+      "id": "u-002",
+      "name": "Ayu Pratama",
+      "email": "ayu@curiosity.app",
+      "role": "instructor",
+      "status": "active",
+      "lastLogin": "2026-03-08 21:17"
+    },
+    {
+      "id": "u-003",
+      "name": "Raka Wijaya",
+      "email": "raka@curiosity.app",
+      "role": "student",
+      "status": "active",
+      "lastLogin": "2026-03-08 19:44"
+    },
+    {
+      "id": "u-004",
+      "name": "Nadia Putri",
+      "email": "nadia@curiosity.app",
+      "role": "student",
+      "status": "suspended",
+      "lastLogin": "2026-03-03 11:08"
+    }
+  ],
+  "credentials": {
+    "indra@curiosity.app": "$2b$10$IOyk5OAG7QSSoL/yRFGXUOx/agphXm4rXmj/Jy5mDyYRLz6skNfZi",
+    "ayu@curiosity.app": "$2b$10$vzM5FlX5he2MqTibgpY9iO/qA2CEcT7DhgklPuAx5g0.TnLy6.XfS",
+    "raka@curiosity.app": "$2b$10$JzoZ5YXG//Fv0KfG/XXcSeaeD.6BA2sFesmNEejo5ahTAIrKU0Nq2"
+  },
+  "permissionMatrix": {
+    "admin": {
+      "viewDashboard": true,
+      "manageCourse": true,
+      "manageQuiz": true,
+      "manageUsers": true
+    },
+    "instructor": {
+      "viewDashboard": true,
+      "manageCourse": true,
+      "manageQuiz": true,
+      "manageUsers": false
+    },
+    "student": {
+      "viewDashboard": true,
+      "manageCourse": false,
+      "manageQuiz": false,
+      "manageUsers": false
+    }
+  },
+  "courseManagementPermissions": {
+    "admin": {
+      "view": true,
+      "create": true,
+      "edit": true,
+      "delete": true,
+      "publish": true,
+      "schedule": true,
+      "bulk": true,
+      "importExport": true,
+      "history": true,
+      "duplicate": true,
+      "restoreRevision": true,
+      "managePermissions": true
+    },
+    "instructor": {
+      "view": true,
+      "create": true,
+      "edit": true,
+      "delete": false,
+      "publish": true,
+      "schedule": true,
+      "bulk": true,
+      "importExport": true,
+      "history": true,
+      "duplicate": true,
+      "restoreRevision": false,
+      "managePermissions": false
+    },
+    "student": {
+      "view": false,
+      "create": false,
+      "edit": false,
+      "delete": false,
+      "publish": false,
+      "schedule": false,
+      "bulk": false,
+      "importExport": false,
+      "history": false,
+      "duplicate": false,
+      "restoreRevision": false,
+      "managePermissions": false
+    }
+  },
+  "courses": [
+    {
+      "id": "ui-101",
+      "title": "UI Design Fundamentals",
+      "description": "Dasar komposisi, warna, tipografi, dan hierarchy.",
+      "tag": "Design",
+      "gradient": "linear-gradient(120deg, #0081a7, #00afb9)",
+      "instructor": "Ayu Pratama",
+      "modules": [
+        {
+          "id": "ui-101-m1",
+          "title": "Foundations",
+          "lessons": [
+            {
+              "id": "ui-101-l1",
+              "title": "Intro to Visual Hierarchy",
+              "duration": "12m",
+              "type": "video",
+              "summary": "Memahami prinsip hierarchy untuk layout yang mudah dipahami.",
+              "transcript": [
+                {
+                  "atSec": 8,
+                  "text": "Visual hierarchy membantu user menangkap informasi paling penting lebih dulu."
+                },
+                {
+                  "atSec": 36,
+                  "text": "Gunakan skala ukuran, kontras, dan posisi untuk memandu scanning pattern."
+                },
+                {
+                  "atSec": 74,
+                  "text": "Judul, subjudul, dan CTA harus punya prioritas visual yang jelas."
+                },
+                {
+                  "atSec": 108,
+                  "text": "Hierarchy yang baik menurunkan cognitive load di halaman dashboard."
+                }
+              ],
+              "resources": [
+                "Hierarchy Checklist.pdf",
+                "Reference Board.fig"
+              ]
+            },
+            {
+              "id": "ui-101-l2",
+              "title": "Typography Pairing",
+              "duration": "16m",
+              "type": "video",
+              "summary": "Kombinasi font headline-body untuk readability.",
+              "transcript": [
+                {
+                  "atSec": 12,
+                  "text": "Mulai dari satu font netral untuk body text yang mudah dibaca."
+                },
+                {
+                  "atSec": 48,
+                  "text": "Pasangkan display font seperlunya untuk heading, bukan untuk paragraf panjang."
+                },
+                {
+                  "atSec": 86,
+                  "text": "Pastikan rasio ukuran heading ke body konsisten di semua halaman."
+                },
+                {
+                  "atSec": 124,
+                  "text": "Gunakan line-height 1.4 sampai 1.6 untuk meningkatkan readability."
+                }
+              ],
+              "resources": [
+                "Type Scale Guide.pdf"
+              ]
+            },
+            {
+              "id": "ui-101-l3",
+              "title": "Color Contrast in UI",
+              "duration": "14m",
+              "type": "video",
+              "summary": "Praktik kontras warna agar aksesibel dan konsisten brand.",
+              "transcript": [
+                {
+                  "atSec": 10,
+                  "text": "Kontras bukan hanya soal estetika, tapi juga aksesibilitas."
+                },
+                {
+                  "atSec": 42,
+                  "text": "Untuk teks normal, targetkan rasio minimal 4.5 banding 1."
+                },
+                {
+                  "atSec": 79,
+                  "text": "State hover dan disabled juga perlu kontras yang tetap terbaca."
+                },
+                {
+                  "atSec": 112,
+                  "text": "Uji kombinasi warna pada latar terang dan gelap sebelum publish."
+                }
+              ],
+              "resources": [
+                "WCAG Contrast Card.pdf"
+              ]
+            },
+            {
+              "id": "ui-101-l4",
+              "title": "Grid and Spacing System",
+              "duration": "18m",
+              "type": "workshop",
+              "summary": "Membuat 8pt grid untuk desain yang rapi dan scalable.",
+              "resources": [
+                "8pt Grid Template.fig"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fe-101",
+      "title": "Frontend for Designer",
+      "description": "HTML, CSS, dan Vue komponen untuk prototyping.",
+      "tag": "Code",
+      "gradient": "linear-gradient(120deg, #fb8500, #ffb703)",
+      "instructor": "Rafi Nugraha",
+      "modules": [
+        {
+          "id": "fe-101-m1",
+          "title": "HTML/CSS Core",
+          "lessons": [
+            {
+              "id": "fe-101-l1",
+              "title": "Semantic HTML Basics",
+              "duration": "10m",
+              "type": "video",
+              "summary": "Struktur HTML yang benar untuk SEO dan aksesibilitas.",
+              "transcript": [
+                {
+                  "atSec": 9,
+                  "text": "Tag semantik membantu browser dan screen reader memahami struktur konten."
+                },
+                {
+                  "atSec": 34,
+                  "text": "Gunakan main hanya sekali, lalu susun section dan article sesuai konteks."
+                },
+                {
+                  "atSec": 61,
+                  "text": "Label pada input form wajib terhubung agar aksesibel."
+                },
+                {
+                  "atSec": 92,
+                  "text": "Semantic HTML mempermudah maintenance dan testing komponen."
+                }
+              ],
+              "resources": [
+                "Semantic Tag Cheat Sheet.pdf"
+              ]
+            },
+            {
+              "id": "fe-101-l2",
+              "title": "Responsive Layout with CSS Grid",
+              "duration": "20m",
+              "type": "video",
+              "summary": "Membangun layout adaptif untuk desktop dan mobile.",
+              "transcript": [
+                {
+                  "atSec": 15,
+                  "text": "Mulai dari grid 12 kolom agar fleksibel untuk banyak skenario layout."
+                },
+                {
+                  "atSec": 58,
+                  "text": "Gunakan minmax dan auto-fit untuk komponen card yang responsif."
+                },
+                {
+                  "atSec": 104,
+                  "text": "Breakpoint harus mengikuti konten, bukan sekadar ukuran device populer."
+                },
+                {
+                  "atSec": 151,
+                  "text": "Gabungkan grid dan container query untuk komponen modular."
+                }
+              ],
+              "resources": [
+                "Grid Playground.zip"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pm-101",
+      "title": "Product Thinking",
+      "description": "Menyusun roadmap fitur berbasis kebutuhan user.",
+      "tag": "Product",
+      "gradient": "linear-gradient(120deg, #8338ec, #3a86ff)",
+      "instructor": "Nadia Putri",
+      "modules": [
+        {
+          "id": "pm-101-m1",
+          "title": "Discovery",
+          "lessons": [
+            {
+              "id": "pm-101-l1",
+              "title": "Problem Framing",
+              "duration": "11m",
+              "type": "video",
+              "summary": "Teknik menyusun problem statement berbasis user impact.",
+              "transcript": [
+                {
+                  "atSec": 11,
+                  "text": "Problem framing dimulai dari user pain yang nyata dan terukur."
+                },
+                {
+                  "atSec": 41,
+                  "text": "Pisahkan gejala dari akar masalah sebelum menentukan solusi."
+                },
+                {
+                  "atSec": 73,
+                  "text": "Tulis problem statement dengan format siapa, hambatan, dan dampaknya."
+                },
+                {
+                  "atSec": 98,
+                  "text": "Validasi framing lewat data perilaku user dan feedback lapangan."
+                }
+              ],
+              "resources": [
+                "Problem Framing Canvas.pdf"
+              ]
+            },
+            {
+              "id": "pm-101-l2",
+              "title": "Prioritization Matrix",
+              "duration": "15m",
+              "type": "workshop",
+              "summary": "Skoring impact vs effort untuk memilih prioritas fitur.",
+              "resources": [
+                "Prioritization Matrix.xlsx"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "courseManagement": [],
+  "quizzes": [
+    {
+      "id": "ui-101",
+      "courseId": "ui-101",
+      "moduleId": "ui-101-m1",
+      "title": "Quiz UI Design Fundamentals",
+      "description": "Evaluasi pemahaman konsep visual hierarchy, typography, dan layout dasar.",
+      "passingScore": 70,
+      "maxAttempts": 3,
+      "timeLimitSec": 480,
+      "questions": [
+        {
+          "id": "q1",
+          "title": "Apa fungsi utama visual hierarchy pada halaman dashboard?",
+          "options": [
+            "Membuat elemen tampak penuh warna",
+            "Mengatur prioritas informasi agar mudah dipindai",
+            "Memastikan semua teks berukuran sama",
+            "Menghapus kebutuhan navigation"
+          ],
+          "correctIndex": 1,
+          "explanation": "Hierarchy membantu user menemukan informasi paling penting lebih cepat."
+        },
+        {
+          "id": "q2",
+          "title": "Komponen mana yang paling tepat untuk menampilkan progres belajar?",
+          "options": [
+            "Modal dialog",
+            "Progress bar",
+            "Tooltip",
+            "Dropdown"
+          ],
+          "correctIndex": 1,
+          "explanation": "Progress bar memberikan konteks visual yang jelas terhadap progres."
+        },
+        {
+          "id": "q3",
+          "title": "Tujuan utama penggunaan grid system adalah...",
+          "options": [
+            "Dekorasi layout",
+            "Konsistensi alignment dan spacing",
+            "Mengurangi warna",
+            "Memperbesar teks"
+          ],
+          "correctIndex": 1,
+          "explanation": "Grid memastikan komponen tersusun rapi dan konsisten antar layar."
+        }
+      ]
+    },
+    {
+      "id": "ui-101-m1",
+      "courseId": "ui-101",
+      "moduleId": "ui-101-m1",
+      "title": "Module Quiz: Foundations",
+      "description": "Kuis cepat setelah modul Foundations selesai.",
+      "passingScore": 70,
+      "maxAttempts": 3,
+      "timeLimitSec": 360,
+      "questions": [
+        {
+          "id": "m1-q1",
+          "title": "Prinsip hierarchy yang paling penting untuk halaman kursus adalah...",
+          "options": [
+            "Kontras ukuran",
+            "Semua elemen setara",
+            "Random alignment",
+            "Warna neon"
+          ],
+          "correctIndex": 0,
+          "explanation": "Kontras ukuran dan visual weight membantu prioritas konten."
+        },
+        {
+          "id": "m1-q2",
+          "title": "Tujuan typography pairing adalah...",
+          "options": [
+            "Agar font terlihat unik",
+            "Meningkatkan readability",
+            "Menghemat warna",
+            "Menaikkan SEO"
+          ],
+          "correctIndex": 1,
+          "explanation": "Typography pairing yang tepat memudahkan membaca konten."
+        }
+      ]
+    },
+    {
+      "id": "fe-101-m1",
+      "courseId": "fe-101",
+      "moduleId": "fe-101-m1",
+      "title": "Module Quiz: HTML/CSS Core",
+      "description": "Validasi dasar semantic HTML dan responsive layout.",
+      "passingScore": 70,
+      "maxAttempts": 3,
+      "timeLimitSec": 360,
+      "questions": [
+        {
+          "id": "fe-q1",
+          "title": "Tag semantic yang tepat untuk area navigasi adalah...",
+          "options": [
+            "<div>",
+            "<nav>",
+            "<span>",
+            "<article>"
+          ],
+          "correctIndex": 1,
+          "explanation": "Tag <nav> digunakan untuk kumpulan link navigasi utama."
+        },
+        {
+          "id": "fe-q2",
+          "title": "CSS Grid berguna untuk...",
+          "options": [
+            "Menyimpan data",
+            "Menyusun layout 2D",
+            "Memanggil API",
+            "Membuat state global"
+          ],
+          "correctIndex": 1,
+          "explanation": "Grid cocok untuk layout baris-kolom yang kompleks."
+        }
+      ]
+    },
+    {
+      "id": "pm-101-m1",
+      "courseId": "pm-101",
+      "moduleId": "pm-101-m1",
+      "title": "Module Quiz: Discovery",
+      "description": "Uji pemahaman problem framing dan prioritization matrix.",
+      "passingScore": 70,
+      "maxAttempts": 3,
+      "timeLimitSec": 360,
+      "questions": [
+        {
+          "id": "pm-q1",
+          "title": "Problem statement sebaiknya berfokus pada...",
+          "options": [
+            "Fitur internal",
+            "Outcome pengguna",
+            "Pilihan warna produk",
+            "Brand slogan"
+          ],
+          "correctIndex": 1,
+          "explanation": "Problem statement yang baik menekankan impact bagi user."
+        },
+        {
+          "id": "pm-q2",
+          "title": "Prioritization matrix mengevaluasi...",
+          "options": [
+            "Mood tim",
+            "Impact vs effort",
+            "Jumlah slide presentasi",
+            "Durasi meeting"
+          ],
+          "correctIndex": 1,
+          "explanation": "Framework ini dipakai untuk menentukan prioritas implementasi fitur."
+        }
+      ]
+    }
+  ],
+  "quizAttempts": {},
+  "quizSessions": {},
+  "uploads": {},
+  "nextUploadSeq": 1,
+  "assignmentSubmissions": {},
+  "courseProgress": {},
+  "lessonNotes": {},
+  "discussions": {},
+  "profiles": {
+    "u-001": {
+      "profile": {
+        "name": "Indra Permana",
+        "email": "indra@curiosity.app",
+        "role": "Admin",
+        "accessRole": "admin",
+        "timezone": "Asia/Jakarta",
+        "avatarDataUrl": "",
+        "bio": "Belajar design systems dan frontend untuk membangun pengalaman belajar yang menarik."
+      },
+      "preferences": {
+        "deadlineNotif": true,
+        "discussionNotif": true,
+        "productUpdateNotif": false,
+        "language": "id",
+        "themeId": "aurora"
+      },
+      "stats": {
+        "streakDays": 12,
+        "coursesCompleted": 7,
+        "learningHours": 146
+      },
+      "certificates": [
+        {
+          "title": "UI Design Fundamentals",
+          "issuedAt": "12 Feb 2026"
+        },
+        {
+          "title": "UX Research Essentials",
+          "issuedAt": "18 Jan 2026"
+        }
+      ],
+      "badges": [
+        "Streak 12 Days",
+        "Quiz Master",
+        "Mentor Choice"
+      ],
+      "progressMetrics": [
+        {
+          "label": "Design Track",
+          "value": 78
+        },
+        {
+          "label": "Frontend Track",
+          "value": 62
+        },
+        {
+          "label": "Product Track",
+          "value": 83
+        }
+      ]
+    },
+    "u-002": {
+      "profile": {
+        "name": "Ayu Pratama",
+        "email": "ayu@curiosity.app",
+        "role": "Instructor",
+        "accessRole": "instructor",
+        "timezone": "Asia/Jakarta",
+        "avatarDataUrl": "",
+        "bio": "Belajar design systems dan frontend untuk membangun pengalaman belajar yang menarik."
+      },
+      "preferences": {
+        "deadlineNotif": true,
+        "discussionNotif": true,
+        "productUpdateNotif": false,
+        "language": "id",
+        "themeId": "aurora"
+      },
+      "stats": {
+        "streakDays": 12,
+        "coursesCompleted": 7,
+        "learningHours": 146
+      },
+      "certificates": [
+        {
+          "title": "UI Design Fundamentals",
+          "issuedAt": "12 Feb 2026"
+        },
+        {
+          "title": "UX Research Essentials",
+          "issuedAt": "18 Jan 2026"
+        }
+      ],
+      "badges": [
+        "Streak 12 Days",
+        "Quiz Master",
+        "Mentor Choice"
+      ],
+      "progressMetrics": [
+        {
+          "label": "Design Track",
+          "value": 78
+        },
+        {
+          "label": "Frontend Track",
+          "value": 62
+        },
+        {
+          "label": "Product Track",
+          "value": 83
+        }
+      ]
+    },
+    "u-003": {
+      "profile": {
+        "name": "Raka Wijaya",
+        "email": "raka@curiosity.app",
+        "role": "Student",
+        "accessRole": "student",
+        "timezone": "Asia/Jakarta",
+        "avatarDataUrl": "",
+        "bio": "Belajar design systems dan frontend untuk membangun pengalaman belajar yang menarik."
+      },
+      "preferences": {
+        "deadlineNotif": true,
+        "discussionNotif": true,
+        "productUpdateNotif": false,
+        "language": "id",
+        "themeId": "aurora"
+      },
+      "stats": {
+        "streakDays": 12,
+        "coursesCompleted": 7,
+        "learningHours": 146
+      },
+      "certificates": [
+        {
+          "title": "UI Design Fundamentals",
+          "issuedAt": "12 Feb 2026"
+        },
+        {
+          "title": "UX Research Essentials",
+          "issuedAt": "18 Jan 2026"
+        }
+      ],
+      "badges": [
+        "Streak 12 Days",
+        "Quiz Master",
+        "Mentor Choice"
+      ],
+      "progressMetrics": [
+        {
+          "label": "Design Track",
+          "value": 78
+        },
+        {
+          "label": "Frontend Track",
+          "value": 62
+        },
+        {
+          "label": "Product Track",
+          "value": 83
+        }
+      ]
+    },
+    "u-004": {
+      "profile": {
+        "name": "Nadia Putri",
+        "email": "nadia@curiosity.app",
+        "role": "Student",
+        "accessRole": "student",
+        "timezone": "Asia/Jakarta",
+        "avatarDataUrl": "",
+        "bio": "Belajar design systems dan frontend untuk membangun pengalaman belajar yang menarik."
+      },
+      "preferences": {
+        "deadlineNotif": true,
+        "discussionNotif": true,
+        "productUpdateNotif": false,
+        "language": "id",
+        "themeId": "aurora"
+      },
+      "stats": {
+        "streakDays": 12,
+        "coursesCompleted": 7,
+        "learningHours": 146
+      },
+      "certificates": [
+        {
+          "title": "UI Design Fundamentals",
+          "issuedAt": "12 Feb 2026"
+        },
+        {
+          "title": "UX Research Essentials",
+          "issuedAt": "18 Jan 2026"
+        }
+      ],
+      "badges": [
+        "Streak 12 Days",
+        "Quiz Master",
+        "Mentor Choice"
+      ],
+      "progressMetrics": [
+        {
+          "label": "Design Track",
+          "value": 78
+        },
+        {
+          "label": "Frontend Track",
+          "value": 62
+        },
+        {
+          "label": "Product Track",
+          "value": 83
+        }
+      ]
+    }
+  },
+  "revokedTokens": [],
+  "telemetryEvents": [],
+  "auditLogs": [
+    {
+      "id": "audit-riss011",
+      "actor": "system",
+      "action": "seed_data",
+      "target": "bootstrap",
+      "detail": "Initial database seeded.",
+      "timestamp": "2026-03-10 15:35"
+    }
+  ]
+}

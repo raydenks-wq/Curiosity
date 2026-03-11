@@ -9,6 +9,8 @@
     "server:dev": "node --watch server/index.js",
     "test:server": "vitest run server",
     "test:e2e": "node tests/e2e/course-player.e2e.mjs",
+    "test:e2e:course-management": "node tests/e2e/course-management.e2e.mjs",
+    "test:e2e:all": "npm run test:e2e && npm run test:e2e:course-management",
     "test:server:coverage": "vitest run server --coverage --coverage.reporter=text --coverage.reporter=lcov --coverage.reportsDirectory=coverage/server --coverage.thresholds.lines=90 --coverage.thresholds.functions=85 --coverage.thresholds.statements=90 --coverage.thresholds.branches=75",
     "build": "vite build",
     "preview": "vite preview"

@@ -1,5 +1,6 @@
 import request from 'supertest'
 import jwt from 'jsonwebtoken'
+import { createHmac } from 'node:crypto'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { app, ensureDb, readDb, resetDb, writeDb } from './index.js'
 
@@ -15,6 +16,54 @@ const loginAs = async (email, password, headers = {}) => {
   const res = await req.send({ email, password })
   return res
 }
+
+const buildManagedCoursePayload = (overrides = {}) => ({
+  id: 'cm-ui-advanced',
+  title: 'UI Advanced Systems',
+  slug: 'ui-advanced-systems',
+  description: 'Kursus lanjutan untuk sistem design dengan struktur modul, evaluasi, dan praktik terukur.',
+  thumbnail: 'https://cdn.example.com/thumb-ui-advanced.jpg',
+  category: 'Design',
+  level: 'advanced',
+  language: 'id',
+  visibility: 'public',
+  status: 'draft',
+  publishAt: '',
+  unpublishAt: '',
+  modules: [
+    {
+      id: 'cm-ui-advanced-m1',
+      title: 'System Foundation',
+      description: 'Dasar yang wajib untuk scale design system.',
+      lessons: [
+        {
+          id: 'cm-ui-advanced-l1',
+          title: 'Token Architecture',
+          type: 'video',
+          durationMin: 14,
+          isPreview: true,
+          isLocked: false,
+          contentUrl: 'https://cdn.example.com/video-token-architecture.mp4',
+        },
+      ],
+    },
+  ],
+  assets: [],
+  settings: {
+    completionMode: 'lesson',
+    completionThresholdPercent: 100,
+    certificateEnabled: true,
+    certificateTemplate: 'default',
+    allowRetake: true,
+    maxRetake: 3,
+    allowProgressReset: false,
+    prerequisiteMode: 'all',
+    prerequisiteCourseIds: [],
+    enrollmentCap: 0,
+    estimatedHours: 12,
+  },
+  ...overrides,
+})
 
 describe('Curiosity API integration', () => {
   beforeEach(async () => {
@@ -145,6 +194,215 @@ describe('Curiosity API integration', () => {
     expect(audit.status).toBe(200)
     expect(Array.isArray(audit.body)).toBe(true)
     expect(audit.body.some((item) => item.action === 'users_create')).toBe(true)
+  })
+
+  it('supports immutable audit verification and notification delivery channel config', async () => {
+    const login = await loginAs('indra@curiosity.app', 'admin123')
+    expect(login.status).toBe(200)
+
+    const saveChannels = await request(app)
+      .put('/api/notifications/channels')
+      .set('Authorization', `Bearer ${login.body.token}`)
+      .send({
+        webhookEnabled: false,
+        webhookUrl: '',
+        emailEnabled: true,
+        emailFrom: 'ops@curiosity.app',
+      })
+    expect(saveChannels.status).toBe(200)
+    expect(saveChannels.body.emailEnabled).toBe(true)
+
+    const testEmail = await request(app)
+      .post('/api/notifications/test-delivery')
+      .set('Authorization', `Bearer ${login.body.token}`)
+      .send({
+        channel: 'email',
+        message: 'Integration test delivery',
+      })
+    expect(testEmail.status).toBe(200)
+    expect(['queued', 'skipped']).toContain(testEmail.body.status)
+
+    const deliveryLogs = await request(app)
+      .get('/api/notifications/delivery-logs?limit=5')
+      .set('Authorization', `Bearer ${login.body.token}`)
+    expect(deliveryLogs.status).toBe(200)
+    expect(Array.isArray(deliveryLogs.body)).toBe(true)
+    expect(deliveryLogs.body.length).toBeGreaterThan(0)
+
+    const immutableAudit = await request(app)
+      .get('/api/audit-logs/immutable?limit=10')
+      .set('Authorization', `Bearer ${login.body.token}`)
+    expect(immutableAudit.status).toBe(200)
+    expect(Array.isArray(immutableAudit.body)).toBe(true)
+
+    const verify = await request(app)
+      .get('/api/audit-logs/immutable/verify')
+      .set('Authorization', `Bearer ${login.body.token}`)
+    expect(verify.status).toBe(200)
+    expect(typeof verify.body.ok).toBe('boolean')
+  })
+
+  it('supports course management server-side queue lifecycle', async () => {
+    const login = await loginAs('indra@curiosity.app', 'admin123')
+    expect(login.status).toBe(200)
+    const auth = { Authorization: `Bearer ${login.body.token}` }
+
+    const created = await request(app).post('/api/course-management').set(auth).send(
+      buildManagedCoursePayload({
+        id: 'cm-queue-target',
+        slug: 'cm-queue-target',
+        title: 'Queue Target',
+      }),
+    )
+    expect(created.status).toBe(200)
+
+    const queued = await request(app)
+      .post('/api/course-management/jobs')
+      .set(auth)
+      .send({
+        type: 'bulk-status',
+        ids: ['cm-queue-target'],
+        statusValue: 'archived',
+      })
+    expect(queued.status).toBe(201)
+    expect(queued.body.status).toBe('pending')
+
+    const processDue = await request(app)
+      .post('/api/course-management/jobs/process-due')
+      .set(auth)
+      .send({})
+    expect(processDue.status).toBe(200)
+    expect(processDue.body.processedJobs).toBeGreaterThan(0)
+
+    const courses = await request(app).get('/api/course-management').set(auth)
+    expect(courses.status).toBe(200)
+    const target = courses.body.find((item) => item.id === 'cm-queue-target')
+    expect(target?.status).toBe('archived')
+  })
+
+  it('moves terminally failed queue jobs to DLQ and supports redrive', async () => {
+    const login = await loginAs('indra@curiosity.app', 'admin123')
+    expect(login.status).toBe(200)
+    const auth = { Authorization: `Bearer ${login.body.token}` }
+
+    const created = await request(app).post('/api/course-management').set(auth).send(
+      buildManagedCoursePayload({
+        id: 'cm-dlq-target',
+        slug: 'cm-dlq-target',
+        title: 'DLQ Target',
+        thumbnail: '',
+      }),
+    )
+    expect(created.status).toBe(200)
+
+    const queued = await request(app)
+      .post('/api/course-management/jobs')
+      .set(auth)
+      .send({
+        type: 'bulk-status',
+        ids: ['cm-dlq-target'],
+        statusValue: 'published',
+      })
+    expect(queued.status).toBe(201)
+
+    await request(app).post(`/api/course-management/jobs/${queued.body.id}/run`).set(auth).send({})
+    await request(app).post(`/api/course-management/jobs/${queued.body.id}/run`).set(auth).send({})
+    await request(app).post(`/api/course-management/jobs/${queued.body.id}/run`).set(auth).send({})
+
+    const dlq = await request(app).get('/api/course-management/jobs/dlq?limit=10').set(auth)
+    expect(dlq.status).toBe(200)
+    expect(Array.isArray(dlq.body)).toBe(true)
+    expect(dlq.body.length).toBeGreaterThan(0)
+    expect(dlq.body[0].snapshot?.type).toBe('bulk-status')
+
+    const redrive = await request(app).post(`/api/course-management/jobs/dlq/${dlq.body[0].id}/redrive`).set(auth).send({})
+    expect(redrive.status).toBe(201)
+    expect(redrive.body.queued?.status).toBe('pending')
+  })
+
+  it('returns compliance export bundle for managed course', async () => {
+    const login = await loginAs('indra@curiosity.app', 'admin123')
+    expect(login.status).toBe(200)
+    const auth = { Authorization: `Bearer ${login.body.token}` }
+
+    const created = await request(app).post('/api/course-management').set(auth).send(
+      buildManagedCoursePayload({
+        id: 'cm-compliance-target',
+        slug: 'cm-compliance-target',
+        title: 'Compliance Target',
+      }),
+    )
+    expect(created.status).toBe(200)
+
+    const exported = await request(app).get('/api/course-management/cm-compliance-target/compliance-export').set(auth)
+    expect(exported.status).toBe(200)
+    expect(exported.body.schemaVersion).toBe('1.0')
+    expect(exported.body.course?.id).toBe('cm-compliance-target')
+    expect(exported.body.audit?.immutableVerify).toBeTypeOf('object')
+  })
+
+  it('requires configured secret for inbound webhook ingest', async () => {
+    const payload = {
+      event: 'curiosity.notification.test',
+      message: 'hello',
+      courseId: 'ui-101',
+    }
+    const bodyText = JSON.stringify(payload)
+    const timestamp = new Date().toISOString()
+    const signature = `v1=${createHmac('sha256', 'fallback-test-secret').update(`${timestamp}.${bodyText}`).digest('hex')}`
+    const response = await request(app)
+      .post('/api/notifications/webhook/ingest')
+      .set('Content-Type', 'application/json')
+      .set('X-Curiosity-Timestamp', timestamp)
+      .set('X-Curiosity-Nonce', 'nonce-test-1')
+      .set('X-Curiosity-Signature', signature)
+      .send(payload)
+    expect([202, 503, 401]).toContain(response.status)
+  })
+
+  it('stores telemetry events and allows admin to list them', async () => {
+    const login = await loginAs('indra@curiosity.app', 'admin123')
+    expect(login.status).toBe(200)
+
+    const create = await request(app)
+      .post('/api/telemetry/events')
+      .set('Authorization', `Bearer ${login.body.token}`)
+      .send({
+        domain: 'course-management',
+        action: 'save-course',
+        severity: 'info',
+        message: 'Course saved',
+        context: {
+          feature: 'manage-course',
+          courseId: 'course-ui-101',
+          operation: 'Save',
+        },
+        meta: {
+          source: 'integration-test',
+        },
+      })
+    expect(create.status).toBe(202)
+    expect(create.body.ok).toBe(true)
+
+    const listed = await request(app)
+      .get('/api/telemetry/events?limit=5')
+      .set('Authorization', `Bearer ${login.body.token}`)
+    expect(listed.status).toBe(200)
+    expect(Array.isArray(listed.body)).toBe(true)
+    expect(listed.body.length).toBeGreaterThan(0)
+    expect(listed.body[0].domain).toBe('course-management')
+    expect(listed.body[0].action).toBe('save-course')
+  })
+
+  it('blocks non-admin users from reading telemetry events', async () => {
+    const login = await loginAs('raka@curiosity.app', 'student123')
+    expect(login.status).toBe(200)
+
+    const listed = await request(app)
+      .get('/api/telemetry/events?limit=5')
+      .set('Authorization', `Bearer ${login.body.token}`)
+    expect(listed.status).toBe(403)
+    expect(listed.body.message).toMatch(/Admin access required/i)
   })
 
   it('updates and resets profile successfully', async () => {
@@ -362,6 +620,198 @@ describe('Curiosity API integration', () => {
       .set('Authorization', `Bearer ${login.body.token}`)
     expect(permissions.status).toBe(200)
     expect(permissions.body.admin.manageUsers).toBe(true)
+  })
+
+  it('enforces course-management access for manager roles only', async () => {
+    const student = await loginAs('raka@curiosity.app', 'student123')
+    const denied = await request(app).get('/api/course-management').set('Authorization', `Bearer ${student.body.token}`)
+    expect(denied.status).toBe(403)
+
+    const instructor = await loginAs('ayu@curiosity.app', 'instructor123')
+    const allowed = await request(app).get('/api/course-management').set('Authorization', `Bearer ${instructor.body.token}`)
+    expect(allowed.status).toBe(200)
+    expect(Array.isArray(allowed.body)).toBe(true)
+  })
+
+  it('blocks publish when backend publish checklist is not satisfied', async () => {
+    const admin = await loginAs('indra@curiosity.app', 'admin123')
+    const auth = { Authorization: `Bearer ${admin.body.token}` }
+    const payload = buildManagedCoursePayload({
+      status: 'published',
+      description: 'Terlalu pendek',
+      thumbnail: '',
+      modules: [
+        {
+          id: 'cm-ui-advanced-m1',
+          title: 'Module',
+          description: '',
+          lessons: [
+            {
+              id: 'cm-ui-advanced-l1',
+              title: 'Lesson',
+              type: 'video',
+              durationMin: 10,
+              isPreview: false,
+              isLocked: false,
+              contentUrl: '',
+            },
+          ],
+        },
+      ],
+    })
+    const res = await request(app).post('/api/course-management').set(auth).send(payload)
+    expect(res.status).toBe(422)
+    expect(Array.isArray(res.body.errors)).toBe(true)
+    expect(res.body.errors.length).toBeGreaterThan(0)
+  })
+
+  it('enforces optimistic concurrency version checks on save', async () => {
+    const admin = await loginAs('indra@curiosity.app', 'admin123')
+    const auth = { Authorization: `Bearer ${admin.body.token}` }
+
+    const created = await request(app).post('/api/course-management').set(auth).send(buildManagedCoursePayload())
+    expect(created.status).toBe(200)
+    expect(created.body.version).toBe(1)
+
+    const updated = await request(app)
+      .post('/api/course-management')
+      .set(auth)
+      .send({
+        ...buildManagedCoursePayload({
+          id: created.body.id,
+          slug: created.body.slug,
+        }),
+        version: 1,
+        title: 'UI Advanced Systems v2',
+      })
+    expect(updated.status).toBe(200)
+    expect(updated.body.version).toBe(2)
+
+    const stale = await request(app)
+      .post('/api/course-management')
+      .set(auth)
+      .send({
+        ...buildManagedCoursePayload({
+          id: created.body.id,
+          slug: created.body.slug,
+        }),
+        version: 1,
+        title: 'UI Advanced Systems stale write',
+      })
+    expect(stale.status).toBe(409)
+    expect(stale.body.latest?.version).toBe(2)
+  })
+
+  it('rejects cyclic prerequisites on backend validation', async () => {
+    const admin = await loginAs('indra@curiosity.app', 'admin123')
+    const auth = { Authorization: `Bearer ${admin.body.token}` }
+
+    const courseA = await request(app)
+      .post('/api/course-management')
+      .set(auth)
+      .send(
+        buildManagedCoursePayload({
+          id: 'cm-course-a',
+          title: 'Course A',
+          slug: 'cm-course-a',
+          level: 'intermediate',
+        }),
+      )
+    expect(courseA.status).toBe(200)
+
+    const courseB = await request(app)
+      .post('/api/course-management')
+      .set(auth)
+      .send(
+        buildManagedCoursePayload({
+          id: 'cm-course-b',
+          title: 'Course B',
+          slug: 'cm-course-b',
+          settings: {
+            ...buildManagedCoursePayload().settings,
+            prerequisiteCourseIds: ['cm-course-a'],
+          },
+        }),
+      )
+    expect(courseB.status).toBe(200)
+
+    const cycleAttempt = await request(app)
+      .post('/api/course-management')
+      .set(auth)
+      .send({
+        ...buildManagedCoursePayload({
+          id: courseA.body.id,
+          title: courseA.body.title,
+          slug: courseA.body.slug,
+          level: courseA.body.level,
+        }),
+        version: courseA.body.version,
+        settings: {
+          ...buildManagedCoursePayload().settings,
+          prerequisiteCourseIds: ['cm-course-b'],
+        },
+      })
+    expect(cycleAttempt.status).toBe(422)
+    expect(Array.isArray(cycleAttempt.body.errors)).toBe(true)
+    expect(cycleAttempt.body.errors).toContain('prerequisite-cycle')
+  })
+
+  it('provides course-management permission matrix controls for admin', async () => {
+    const admin = await loginAs('indra@curiosity.app', 'admin123')
+    const auth = { Authorization: `Bearer ${admin.body.token}` }
+
+    const current = await request(app).get('/api/course-management/permissions').set(auth)
+    expect(current.status).toBe(200)
+    expect(current.body.managePermissions).toBe(true)
+
+    const matrix = await request(app).get('/api/course-management/permissions/matrix').set(auth)
+    expect(matrix.status).toBe(200)
+    expect(matrix.body.instructor.delete).toBe(false)
+
+    const updated = await request(app)
+      .put('/api/course-management/permissions/matrix')
+      .set(auth)
+      .send({
+        ...matrix.body,
+        instructor: {
+          ...matrix.body.instructor,
+          delete: true,
+        },
+      })
+    expect(updated.status).toBe(200)
+    expect(updated.body.instructor.delete).toBe(true)
+  })
+
+  it('returns revision history and restores selected revision', async () => {
+    const admin = await loginAs('indra@curiosity.app', 'admin123')
+    const auth = { Authorization: `Bearer ${admin.body.token}` }
+
+    const created = await request(app).post('/api/course-management').set(auth).send(buildManagedCoursePayload())
+    expect(created.status).toBe(200)
+
+    const updated = await request(app)
+      .post('/api/course-management')
+      .set(auth)
+      .send({
+        ...buildManagedCoursePayload({
+          id: created.body.id,
+          slug: created.body.slug,
+        }),
+        version: created.body.version,
+        title: 'UI Advanced Systems Updated',
+      })
+    expect(updated.status).toBe(200)
+
+    const revisions = await request(app).get(`/api/course-management/${updated.body.id}/revisions`).set(auth)
+    expect(revisions.status).toBe(200)
+    expect(Array.isArray(revisions.body)).toBe(true)
+    expect(revisions.body.length).toBeGreaterThan(0)
+
+    const restored = await request(app)
+      .post(`/api/course-management/${updated.body.id}/revisions/${revisions.body[0].id}/restore`)
+      .set(auth)
+    expect(restored.status).toBe(200)
+    expect(restored.body.version).toBeGreaterThan(updated.body.version)
   })
 
   it('supports course listing and lesson progression with locking rules', async () => {

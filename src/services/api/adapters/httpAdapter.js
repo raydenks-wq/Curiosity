@@ -171,16 +171,56 @@ export const httpAdapter = {
       httpClient.request(`/audit-logs?limit=${encodeURIComponent(limit)}`, {
         auth: true,
       }),
+    listImmutable: (limit = 120) =>
+      httpClient.request(`/audit-logs/immutable?limit=${encodeURIComponent(limit)}`, {
+        auth: true,
+      }),
+    verifyImmutable: () =>
+      httpClient.request('/audit-logs/immutable/verify', {
+        auth: true,
+      }),
   },
   notifications: {
     list: (limit = 30) =>
       httpClient.request(`/notifications?limit=${encodeURIComponent(limit)}`, {
         auth: true,
       }),
+    getChannels: () =>
+      httpClient.request('/notifications/channels', {
+        auth: true,
+      }),
+    saveChannels: (payload) =>
+      httpClient.request('/notifications/channels', {
+        method: 'PUT',
+        auth: true,
+        body: payload,
+      }),
+    listDeliveryLogs: (limit = 100) =>
+      httpClient.request(`/notifications/delivery-logs?limit=${encodeURIComponent(limit)}`, {
+        auth: true,
+      }),
+    testDelivery: (payload) =>
+      httpClient.request('/notifications/test-delivery', {
+        method: 'POST',
+        auth: true,
+        body: payload,
+      }),
   },
   analytics: {
     getLearning: () =>
       httpClient.request('/analytics/learning', {
+        auth: true,
+      }),
+  },
+  observability: {
+    track: (payload) =>
+      httpClient.request('/telemetry/events', {
+        method: 'POST',
+        body: payload,
+        auth: true,
+      }),
+    list: (limit = 100) =>
+      httpClient.request(`/telemetry/events?limit=${encodeURIComponent(limit)}`, {
         auth: true,
       }),
   },
@@ -326,6 +366,20 @@ export const httpAdapter = {
       httpClient.request('/course-management', {
         auth: true,
       }),
+    getPermissions: () =>
+      httpClient.request('/course-management/permissions', {
+        auth: true,
+      }),
+    getPermissionMatrix: () =>
+      httpClient.request('/course-management/permissions/matrix', {
+        auth: true,
+      }),
+    savePermissionMatrix: (payload) =>
+      httpClient.request('/course-management/permissions/matrix', {
+        method: 'PUT',
+        body: payload,
+        auth: true,
+      }),
     save: (payload) =>
       httpClient.request('/course-management', {
         method: 'POST',
@@ -342,10 +396,61 @@ export const httpAdapter = {
         method: 'POST',
         auth: true,
       }),
-    updateStatus: (courseId, status) =>
+    listRevisions: (courseId) =>
+      httpClient.request(`/course-management/${encodeURIComponent(courseId)}/revisions`, {
+        auth: true,
+      }),
+    restoreRevision: (courseId, revisionId) =>
+      httpClient.request(`/course-management/${encodeURIComponent(courseId)}/revisions/${encodeURIComponent(revisionId)}/restore`, {
+        method: 'POST',
+        auth: true,
+      }),
+    updateStatus: (courseId, status, version) =>
       httpClient.request(`/course-management/${encodeURIComponent(courseId)}/status`, {
         method: 'PATCH',
-        body: { status },
+        body: { status, version },
+        auth: true,
+      }),
+    listJobs: (limit = 120) =>
+      httpClient.request(`/course-management/jobs?limit=${encodeURIComponent(limit)}`, {
+        auth: true,
+      }),
+    enqueueJob: (payload) =>
+      httpClient.request('/course-management/jobs', {
+        method: 'POST',
+        body: payload,
+        auth: true,
+      }),
+    processDueJobs: () =>
+      httpClient.request('/course-management/jobs/process-due', {
+        method: 'POST',
+        auth: true,
+      }),
+    runJob: (jobId) =>
+      httpClient.request(`/course-management/jobs/${encodeURIComponent(jobId)}/run`, {
+        method: 'POST',
+        auth: true,
+      }),
+    listDlq: (limit = 120) =>
+      httpClient.request(`/course-management/jobs/dlq?limit=${encodeURIComponent(limit)}`, {
+        auth: true,
+      }),
+    redriveDlq: (dlqId) =>
+      httpClient.request(`/course-management/jobs/dlq/${encodeURIComponent(dlqId)}/redrive`, {
+        method: 'POST',
+        auth: true,
+      }),
+    getWorkerLease: () =>
+      httpClient.request('/course-management/jobs/worker-lease', {
+        auth: true,
+      }),
+    removeJob: (jobId) =>
+      httpClient.request(`/course-management/jobs/${encodeURIComponent(jobId)}`, {
+        method: 'DELETE',
+        auth: true,
+      }),
+    exportComplianceBundle: (courseId) =>
+      httpClient.request(`/course-management/${encodeURIComponent(courseId)}/compliance-export`, {
         auth: true,
       }),
   },

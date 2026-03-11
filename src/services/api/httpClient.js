@@ -8,12 +8,11 @@ const joinUrl = (base, path) => {
   return `${normalizedBase}${normalizedPath}`
 }
 
-const buildErrorMessage = async (response) => {
+const parseErrorBody = async (response) => {
   try {
-    const data = await response.json()
-    return data?.message || data?.error || `HTTP ${response.status}`
+    return await response.json()
   } catch {
-    return `HTTP ${response.status}`
+    return null
   }
 }
 
@@ -57,10 +56,12 @@ export const httpClient = {
     })
 
     if (!response.ok) {
-      const message = await buildErrorMessage(response)
+      const data = await parseErrorBody(response)
+      const message = data?.message || data?.error || `HTTP ${response.status}`
       const error = new Error(message)
       error.code = response.status === 401 ? 'AUTH_REQUIRED' : response.status === 403 ? 'FORBIDDEN' : 'HTTP_ERROR'
       error.status = response.status
+      error.data = data
       throw error
     }
 
