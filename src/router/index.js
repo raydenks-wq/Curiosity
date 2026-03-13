@@ -1,15 +1,19 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import DashboardView from '../views/DashboardView.vue'
-import CourseDetailView from '../views/CourseDetailView.vue'
-import QuizView from '../views/QuizView.vue'
-import QuizManagementView from '../views/QuizManagementView.vue'
-import CourseManagementView from '../views/CourseManagementView.vue'
-import ProfileView from '../views/ProfileView.vue'
-import UserManagementView from '../views/UserManagementView.vue'
-import LoginView from '../views/LoginView.vue'
 import { useAuthStore } from '../stores/auth'
 import { useProfileStore } from '../stores/profile'
 import { useToastStore } from '../stores/toast'
+
+const DashboardView = () => import('../views/DashboardView.vue')
+const CourseCatalogView = () => import('../views/CourseCatalogView.vue')
+const CourseDetailView = () => import('../views/CourseDetailView.vue')
+const QuizView = () => import('../views/QuizView.vue')
+const QuizManagementView = () => import('../views/QuizManagementView.vue')
+const CourseManagementView = () => import('../views/CourseManagementView.vue')
+const CertificateManagementView = () => import('../views/CertificateManagementView.vue')
+const CertificateVerifyView = () => import('../views/CertificateVerifyView.vue')
+const ProfileView = () => import('../views/ProfileView.vue')
+const UserManagementView = () => import('../views/UserManagementView.vue')
+const LoginView = () => import('../views/LoginView.vue')
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -18,6 +22,12 @@ const router = createRouter({
       path: '/',
       name: 'dashboard',
       component: DashboardView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/courses',
+      name: 'courses',
+      component: CourseCatalogView,
       meta: { requiresAuth: true },
     },
     {
@@ -46,6 +56,18 @@ const router = createRouter({
       meta: { requiresAuth: true, roles: ['admin', 'instructor'] },
     },
     {
+      path: '/management/certificates',
+      name: 'certificate-management',
+      component: CertificateManagementView,
+      meta: { requiresAuth: true, roles: ['admin', 'instructor'] },
+    },
+    {
+      path: '/verify/certificate/:code?',
+      name: 'certificate-verify',
+      component: CertificateVerifyView,
+      meta: { requiresAuth: false },
+    },
+    {
       path: '/profile',
       name: 'profile',
       component: ProfileView,
@@ -65,6 +87,34 @@ const router = createRouter({
     },
   ],
 })
+
+const prefetchedRouteKeys = new Set()
+const resolveRouteComponents = (target) => {
+  const resolved = router.resolve(target)
+  return (resolved.matched || [])
+    .map((record) => {
+      if (record?.components?.default) return record.components.default
+      if (record?.component) return record.component
+      return null
+    })
+    .filter(Boolean)
+}
+
+export const prefetchRouteComponents = async (target) => {
+  const resolved = router.resolve(target)
+  const key = `${resolved.name || resolved.path}::${resolved.fullPath || resolved.path}`
+  if (prefetchedRouteKeys.has(key)) return
+  prefetchedRouteKeys.add(key)
+  const components = resolveRouteComponents(target)
+  const tasks = components
+    .map((component) => {
+      if (typeof component === 'function') return component()
+      return null
+    })
+    .filter(Boolean)
+  if (!tasks.length) return
+  await Promise.allSettled(tasks)
+}
 
 router.beforeEach(async (to) => {
   const authStore = useAuthStore()

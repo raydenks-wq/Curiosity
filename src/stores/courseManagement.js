@@ -15,6 +15,12 @@ const toSlug = (value) =>
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '')
 
+const sanitizeInlineDataUrl = (value, maxLength = 4096) => {
+  const text = String(value || '')
+  if (!text.startsWith('data:')) return text
+  return text.length <= maxLength ? text : ''
+}
+
 const durationToMinutes = (value) => {
   const text = String(value || '').trim()
   const match = text.match(/^(\d+)/)
@@ -71,6 +77,23 @@ const createLesson = (moduleId, index = 1) => ({
   isPreview: index === 1,
   isLocked: false,
   contentUrl: '',
+  videoUrl: '',
+  transcriptUrl: '',
+  articleContent: '',
+  articleReferenceUrl: '',
+  articleAttachmentId: '',
+  articleAttachmentUrl: '',
+  articleAttachmentName: '',
+  quizId: '',
+  quizPassingScore: 70,
+  quizTimerMin: 0,
+  assignmentInstruction: '',
+  assignmentMode: 'file',
+  assignmentDueAt: '',
+  assignmentResourceUrl: '',
+  liveMeetingUrl: '',
+  liveStartAt: '',
+  liveTimezone: 'Asia/Jakarta',
 })
 
 const createModule = (index = 1) => {
@@ -90,6 +113,7 @@ const createBlankCourse = () => ({
   slug: '',
   description: '',
   thumbnail: '',
+  thumbnailUploadId: '',
   category: 'Design',
   level: 'beginner',
   language: 'id',
@@ -107,6 +131,12 @@ const createBlankCourse = () => ({
 
 const normalizeLesson = (lesson, moduleId, index) => {
   const type = LESSON_TYPES.includes(lesson?.type) ? lesson.type : 'video'
+  const videoUrl = String(lesson?.videoUrl || '')
+  const articleReferenceUrl = String(lesson?.articleReferenceUrl || '')
+  const assignmentResourceUrl = String(lesson?.assignmentResourceUrl || '')
+  const liveMeetingUrl = String(lesson?.liveMeetingUrl || '')
+  const contentUrl =
+    sanitizeInlineDataUrl(String(lesson?.contentUrl || lesson?.videoUrl || lesson?.articleReferenceUrl || lesson?.assignmentResourceUrl || lesson?.liveMeetingUrl || ''))
   return {
     id: String(lesson?.id || `${moduleId}-l${index + 1}`),
     title: String(lesson?.title || ''),
@@ -114,7 +144,24 @@ const normalizeLesson = (lesson, moduleId, index) => {
     durationMin: Math.max(1, Number(lesson?.durationMin || durationToMinutes(lesson?.duration) || 10)),
     isPreview: Boolean(lesson?.isPreview ?? index === 0),
     isLocked: Boolean(lesson?.isLocked),
-    contentUrl: String(lesson?.contentUrl || lesson?.videoUrl || ''),
+    contentUrl,
+    videoUrl: sanitizeInlineDataUrl(type === 'video' ? (videoUrl || contentUrl) : videoUrl),
+    transcriptUrl: String(lesson?.transcriptUrl || ''),
+    articleContent: String(lesson?.articleContent || ''),
+    articleReferenceUrl: sanitizeInlineDataUrl(type === 'article' ? (articleReferenceUrl || contentUrl) : articleReferenceUrl),
+    articleAttachmentId: String(lesson?.articleAttachmentId || ''),
+    articleAttachmentUrl: String(lesson?.articleAttachmentUrl || ''),
+    articleAttachmentName: String(lesson?.articleAttachmentName || ''),
+    quizId: String(lesson?.quizId || ''),
+    quizPassingScore: Math.min(100, Math.max(0, Number(lesson?.quizPassingScore ?? 70))),
+    quizTimerMin: Math.max(0, Number(lesson?.quizTimerMin ?? 0)),
+    assignmentInstruction: String(lesson?.assignmentInstruction || ''),
+    assignmentMode: ['file', 'link', 'text'].includes(String(lesson?.assignmentMode || '')) ? String(lesson?.assignmentMode) : 'file',
+    assignmentDueAt: String(lesson?.assignmentDueAt || ''),
+    assignmentResourceUrl: sanitizeInlineDataUrl(type === 'assignment' ? (assignmentResourceUrl || contentUrl) : assignmentResourceUrl),
+    liveMeetingUrl: sanitizeInlineDataUrl(type === 'live' ? (liveMeetingUrl || contentUrl) : liveMeetingUrl),
+    liveStartAt: String(lesson?.liveStartAt || ''),
+    liveTimezone: String(lesson?.liveTimezone || 'Asia/Jakarta'),
   }
 }
 
@@ -207,7 +254,8 @@ const normalizeCourse = (course, index = 0) => {
     title,
     slug: String(course?.slug || toSlug(title) || id),
     description: String(course?.description || ''),
-    thumbnail: String(course?.thumbnail || ''),
+    thumbnail: sanitizeInlineDataUrl(String(course?.thumbnail || ''), 8192),
+    thumbnailUploadId: String(course?.thumbnailUploadId || ''),
     category: String(course?.category || course?.tag || 'General'),
     level: String(course?.level || 'beginner'),
     language: String(course?.language || 'id'),
@@ -560,7 +608,9 @@ export const useCourseManagementStore = defineStore('courseManagement', {
       try {
         await this.loadPermissions()
         const managed = apiClient.courseManagement ? await apiClient.courseManagement.list() : []
-        if (Array.isArray(managed) && managed.length) {
+        const hasManagedStore =
+          typeof localStorage !== 'undefined' && localStorage.getItem('curiosity:lms:course-management:v1') !== null
+        if (Array.isArray(managed) && (managed.length || hasManagedStore)) {
           this.courses = this.applyScheduleTransitions(managed.map((course, index) => normalizeCourse(course, index)))
           this.editor = clone(this.courses[0] || createBlankCourse())
           if (this.editor.id) await this.loadRevisions(this.editor.id)

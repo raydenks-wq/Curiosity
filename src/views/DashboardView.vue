@@ -75,33 +75,6 @@
       </div>
     </article>
 
-    <article class="card aurora-kpi">
-      <h3>Progress Radar</h3>
-      <div class="aurora-kpi-grid">
-        <div>
-          <p class="muted">Mingguan</p>
-          <p class="stat-big">{{ weeklyProgress }}%</p>
-        </div>
-        <div>
-          <p class="muted">Growth</p>
-          <p class="stat-big">+{{ weeklyGain }}%</p>
-        </div>
-        <div>
-          <p class="muted">Study Time</p>
-          <p class="stat-big">{{ weeklyStudyMinutes }}m</p>
-        </div>
-      </div>
-    </article>
-
-    <article class="card aurora-timeline">
-      <h3>Timeline Hari Ini</h3>
-      <ul class="activity-list">
-        <li>09:00 - Review feedback mentor</li>
-        <li>13:00 - Kerjakan quiz UI Dasar</li>
-        <li>20:00 - Sesi diskusi komunitas</li>
-      </ul>
-    </article>
-
     <article class="card aurora-courses">
       <div class="section-header">
         <h3>Course Pipeline</h3>
@@ -125,7 +98,36 @@
       </div>
     </article>
 
-    <TemplateDashboardWidget class="aurora-widget" />
+    <aside class="aurora-side-stack">
+      <article class="card aurora-kpi">
+        <h3>Progress Radar</h3>
+        <div class="aurora-kpi-grid">
+          <div class="aurora-kpi-item">
+            <p class="muted">Mingguan</p>
+            <p class="stat-big">{{ weeklyProgress }}%</p>
+          </div>
+          <div class="aurora-kpi-item">
+            <p class="muted">Growth</p>
+            <p class="stat-big">+{{ weeklyGain }}%</p>
+          </div>
+          <div class="aurora-kpi-item">
+            <p class="muted">Study Time</p>
+            <p class="stat-big">{{ weeklyStudyMinutes }}m</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="card aurora-timeline">
+        <h3>Timeline Hari Ini</h3>
+        <ul class="activity-list aurora-timeline-list">
+          <li>09:00 - Review feedback mentor</li>
+          <li>13:00 - Kerjakan quiz UI Dasar</li>
+          <li>20:00 - Sesi diskusi komunitas</li>
+        </ul>
+      </article>
+
+      <TemplateDashboardWidget class="aurora-widget" />
+    </aside>
   </section>
 </template>
 
@@ -138,10 +140,12 @@ import TemplateHeroArt from '../components/template/TemplateHeroArt.vue'
 import { useTemplateSwitcher } from '../plugins/templateSwitcher'
 import { useCoursePlayerStore } from '../stores/coursePlayer'
 import { useLearningAnalyticsStore } from '../stores/learningAnalytics'
+import { useToastStore } from '../stores/toast'
 
 const { currentTemplate } = useTemplateSwitcher()
 const coursePlayerStore = useCoursePlayerStore()
 const analyticsStore = useLearningAnalyticsStore()
+const toastStore = useToastStore()
 const { courses, continueLearning } = storeToRefs(coursePlayerStore)
 const { data: analyticsData } = storeToRefs(analyticsStore)
 
@@ -226,7 +230,15 @@ const animateCourses = () => {
 }
 
 onMounted(async () => {
-  await coursePlayerStore.loadCourses()
+  try {
+    await coursePlayerStore.loadCourses()
+  } catch (error) {
+    toastStore.push({
+      type: 'error',
+      title: 'Dashboard gagal memuat course',
+      message: error instanceof Error ? error.message : 'Terjadi kesalahan saat memuat data course.',
+    })
+  }
   try {
     await analyticsStore.load()
   } catch {

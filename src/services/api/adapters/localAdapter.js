@@ -17,6 +17,10 @@ const LOCAL_COURSE_MGMT_JOBS_KEY = 'curiosity:lms:course-management:jobs:v1'
 const LOCAL_COURSE_MGMT_DLQ_KEY = 'curiosity:lms:course-management:dlq:v1'
 const LOCAL_NOTIFICATION_CHANNELS_KEY = 'curiosity:lms:notification-channels:v1'
 const LOCAL_NOTIFICATION_DELIVERY_LOGS_KEY = 'curiosity:lms:notification-delivery-logs:v1'
+const LOCAL_CERTIFICATE_DB_KEY = 'curiosity:lms:certificates:v2'
+const LEGACY_CERTIFICATE_TEMPLATE_KEY = 'curiosity:lms:certificate-templates:v1'
+const LEGACY_CERTIFICATE_ISSUANCE_KEY = 'curiosity:lms:certificate-issuance:v1'
+const CERTIFICATE_SCHEMA_VERSION = 2
 const seedQuizIds = ['ui-101', 'ui-101-m1', 'fe-101-m1', 'pm-101-m1']
 const courseManagementPermissionDefault = {
   admin: {
@@ -79,6 +83,145 @@ const writeJson = (key, value) => {
   localStorage.setItem(key, JSON.stringify(value))
 }
 
+const createCertificateTemplateId = (seq) => `certtpl-${String(seq || 1).padStart(4, '0')}`
+const createCertificateIssuanceId = (seq) => `certiss-${String(seq || 1).padStart(5, '0')}`
+const createVerificationCode = (certificateNo) =>
+  `${String(certificateNo || 'crt').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Math.random().toString(36).slice(2, 8)}`
+
+const normalizeCertificateTemplate = (item) => {
+  const nowIso = new Date().toISOString()
+  return {
+    id: String(item?.id || ''),
+    title: String(item?.title || '').trim(),
+    subtitle: String(item?.subtitle || '').trim(),
+    bodyText: String(item?.bodyText || '').trim(),
+    status: ['draft', 'published', 'archived'].includes(String(item?.status || 'draft')) ? String(item.status) : 'draft',
+    courseId: String(item?.courseId || '').trim(),
+    passingScore: Math.max(0, Math.min(100, Number(item?.passingScore || 70))),
+    validityDays: Math.max(1, Math.min(3650, Number(item?.validityDays || 365))),
+    certificatePrefix: String(item?.certificatePrefix || 'CRT')
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9-]/g, '')
+      .slice(0, 12) || 'CRT',
+    signerName: String(item?.signerName || '').trim(),
+    signerTitle: String(item?.signerTitle || '').trim(),
+    autoIssue: Boolean(item?.autoIssue ?? true),
+    theme: ['aurora', 'sunrise', 'minimal'].includes(String(item?.theme || 'aurora')) ? String(item.theme) : 'aurora',
+    createdAt: item?.createdAt || nowIso,
+    updatedAt: item?.updatedAt || nowIso,
+  }
+}
+
+const normalizeCertificateIssuance = (item) => {
+  const issuedAt = item?.issuedAt || new Date().toISOString()
+  return {
+    id: String(item?.id || ''),
+    templateId: String(item?.templateId || ''),
+    templateTitle: String(item?.templateTitle || ''),
+    courseId: String(item?.courseId || ''),
+    courseTitle: String(item?.courseTitle || ''),
+    recipientName: String(item?.recipientName || '').trim(),
+    recipientEmail: String(item?.recipientEmail || '').trim().toLowerCase(),
+    certificateNo: String(item?.certificateNo || '').trim().toUpperCase(),
+    verificationCode: String(item?.verificationCode || '').trim().toLowerCase(),
+    issuedAt,
+    expiresAt: item?.expiresAt || null,
+    status: ['issued', 'revoked', 'expired'].includes(String(item?.status || 'issued')) ? String(item.status) : 'issued',
+    score: Number.isFinite(Number(item?.score)) ? Math.max(0, Math.min(100, Number(item.score))) : null,
+    issuedBy: item?.issuedBy && typeof item.issuedBy === 'object'
+      ? {
+          id: String(item.issuedBy.id || ''),
+          name: String(item.issuedBy.name || ''),
+          email: String(item.issuedBy.email || ''),
+        }
+      : null,
+    revokedAt: item?.revokedAt || null,
+    revokedReason: String(item?.revokedReason || '').trim(),
+  }
+}
+
+const defaultCertificateStore = () => ({
+  schemaVersion: CERTIFICATE_SCHEMA_VERSION,
+  templates: [],
+  issuances: [],
+  counters: {
+    template: 1,
+    issuance: 1,
+    certificate: 1,
+  },
+})
+
+const buildCertificateStoreFromLegacy = () => {
+  const fallback = defaultCertificateStore()
+  const legacyTemplates = readJson(LEGACY_CERTIFICATE_TEMPLATE_KEY, [])
+  const legacyIssuances = readJson(LEGACY_CERTIFICATE_ISSUANCE_KEY, [])
+  const templates = (Array.isArray(legacyTemplates) ? legacyTemplates : [])
+    .map((item) => normalizeCertificateTemplate(item))
+    .filter((item) => item.id && item.title && item.courseId)
+  const templateMap = new Map(templates.map((item) => [item.id, item]))
+  const issuances = (Array.isArray(legacyIssuances) ? legacyIssuances : [])
+    .map((item) => {
+      const template = templateMap.get(String(item?.templateId || ''))
+      const certificateNo = String(item?.certificateNo || '').trim().toUpperCase() || `CRT-${Date.now().toString().slice(-6)}`
+      return normalizeCertificateIssuance({
+        ...item,
+        certificateNo,
+        verificationCode: item?.verificationCode || createVerificationCode(certificateNo),
+        courseId: item?.courseId || template?.courseId || '',
+      })
+    })
+    .filter((item) => item.id && item.templateId && item.certificateNo)
+  const next = {
+    schemaVersion: CERTIFICATE_SCHEMA_VERSION,
+    templates,
+    issuances,
+    counters: {
+      template: Math.max(1, templates.length + 1),
+      issuance: Math.max(1, issuances.length + 1),
+      certificate: Math.max(1, issuances.length + 1),
+    },
+  }
+  writeJson(LOCAL_CERTIFICATE_DB_KEY, next)
+  return next
+}
+
+const readCertificateStore = () => {
+  const raw = readJson(LOCAL_CERTIFICATE_DB_KEY, null)
+  if (!raw || typeof raw !== 'object') return buildCertificateStoreFromLegacy()
+  if (Number(raw.schemaVersion || 0) !== CERTIFICATE_SCHEMA_VERSION) return buildCertificateStoreFromLegacy()
+  const templates = (Array.isArray(raw.templates) ? raw.templates : [])
+    .map((item) => normalizeCertificateTemplate(item))
+    .filter((item) => item.id && item.title && item.courseId)
+  const issuances = (Array.isArray(raw.issuances) ? raw.issuances : [])
+    .map((item) => normalizeCertificateIssuance(item))
+    .filter((item) => item.id && item.templateId && item.certificateNo)
+  return {
+    schemaVersion: CERTIFICATE_SCHEMA_VERSION,
+    templates,
+    issuances,
+    counters: {
+      template: Math.max(1, Number(raw?.counters?.template || templates.length + 1)),
+      issuance: Math.max(1, Number(raw?.counters?.issuance || issuances.length + 1)),
+      certificate: Math.max(1, Number(raw?.counters?.certificate || issuances.length + 1)),
+    },
+  }
+}
+
+const writeCertificateStore = (payload) => {
+  const safe = payload && typeof payload === 'object' ? payload : defaultCertificateStore()
+  writeJson(LOCAL_CERTIFICATE_DB_KEY, {
+    schemaVersion: CERTIFICATE_SCHEMA_VERSION,
+    templates: Array.isArray(safe.templates) ? safe.templates : [],
+    issuances: Array.isArray(safe.issuances) ? safe.issuances : [],
+    counters: {
+      template: Math.max(1, Number(safe?.counters?.template || 1)),
+      issuance: Math.max(1, Number(safe?.counters?.issuance || 1)),
+      certificate: Math.max(1, Number(safe?.counters?.certificate || 1)),
+    },
+  })
+}
+
 const seedQuizBank = () => {
   const seeded = seedQuizIds
     .map((id) => quizCatalogService.getQuizById(id))
@@ -105,6 +248,92 @@ const readManagedCourses = () => {
 
 const writeManagedCourses = (courses) => {
   writeJson(LOCAL_COURSE_MGMT_KEY, Array.isArray(courses) ? courses : [])
+}
+const stringifySize = (value) => {
+  try {
+    return JSON.stringify(value || '').length
+  } catch {
+    return 0
+  }
+}
+const pruneInlineDataUrls = (input, { maxDataUrlLength = 8192 } = {}) => {
+  let removed = 0
+  const walk = (value) => {
+    if (Array.isArray(value)) {
+      return value.map((item) => walk(item))
+    }
+    if (!value || typeof value !== 'object') {
+      if (typeof value === 'string' && value.startsWith('data:') && value.length > maxDataUrlLength) {
+        removed += 1
+        return ''
+      }
+      return value
+    }
+    const next = {}
+    Object.entries(value).forEach(([key, raw]) => {
+      const shouldDropInline = (key === 'thumbnail' || key === 'contentUrl' || key === 'videoUrl' || key === 'articleReferenceUrl' || key === 'assignmentResourceUrl' || key === 'liveMeetingUrl')
+      if (typeof raw === 'string' && raw.startsWith('data:')) {
+        if (shouldDropInline || raw.length > maxDataUrlLength) {
+          removed += 1
+          next[key] = ''
+          return
+        }
+      }
+      next[key] = walk(raw)
+    })
+    return next
+  }
+  return { value: walk(input), removed }
+}
+const getReferencedUploadIds = (courses = []) => {
+  const ids = new Set()
+  ;(Array.isArray(courses) ? courses : []).forEach((course) => {
+    const thumbnailUploadId = String(course?.thumbnailUploadId || '').trim()
+    if (thumbnailUploadId) ids.add(thumbnailUploadId)
+    ;(Array.isArray(course?.modules) ? course.modules : []).forEach((module) => {
+      ;(Array.isArray(module?.lessons) ? module.lessons : []).forEach((lesson) => {
+        const articleAttachmentId = String(lesson?.articleAttachmentId || '').trim()
+        if (articleAttachmentId) ids.add(articleAttachmentId)
+      })
+    })
+  })
+  const assignmentStore = readAssignmentStore()
+  Object.values(assignmentStore || {}).forEach((rows) => {
+    ;(Array.isArray(rows) ? rows : []).forEach((submission) => {
+      const attachmentId = String(submission?.attachmentId || '').trim()
+      if (attachmentId) ids.add(attachmentId)
+    })
+  })
+  return ids
+}
+const cleanupLocalStorageFootprint = () => {
+  const originalCourses = readManagedCourses()
+  const beforeCourseBytes = stringifySize(originalCourses)
+  const pruned = pruneInlineDataUrls(originalCourses)
+  const cleanedCourses = Array.isArray(pruned.value) ? pruned.value : []
+  writeManagedCourses(cleanedCourses)
+
+  const referencedUploadIds = getReferencedUploadIds(cleanedCourses)
+  const uploads = readUploadStore()
+  const nextUploads = { __seq: uploads.__seq || 1 }
+  let removedUploads = 0
+  Object.entries(uploads).forEach(([key, value]) => {
+    if (key === '__seq') return
+    if (referencedUploadIds.has(key)) {
+      nextUploads[key] = value
+      return
+    }
+    removedUploads += 1
+  })
+  writeUploadStore(nextUploads)
+  const afterCourseBytes = stringifySize(cleanedCourses)
+  return {
+    prunedInlineDataUrlCount: pruned.removed,
+    removedUploads,
+    beforeCourseBytes,
+    afterCourseBytes,
+    reclaimedCourseBytes: Math.max(0, beforeCourseBytes - afterCourseBytes),
+  }
 }
 const readCourseManagementPermissionMatrix = () => {
   const value = readJson(LOCAL_COURSE_MGMT_PERMISSION_KEY, courseManagementPermissionDefault)
@@ -315,6 +544,16 @@ const shuffle = (list) => {
 
 const getLocalQuiz = (quizId) => readQuizBank().find((item) => item.id === quizId) || null
 const canManageQuiz = (user) => user?.role === 'admin' || user?.role === 'instructor'
+const canManageCertificate = (user) => user?.role === 'admin' || user?.role === 'instructor'
+
+const resolveCourseTitleLocal = (courseId) => {
+  const id = String(courseId || '').trim()
+  if (!id) return '-'
+  const managed = readManagedCourses().find((item) => item.id === id)
+  if (managed?.title) return String(managed.title)
+  const listed = coursePlayerService.listCourses('guest').find((item) => item.id === id)
+  return listed?.title || id
+}
 
 const createLocalSession = (quiz, attemptNo) => {
   const now = Date.now()
@@ -363,6 +602,9 @@ const allowedUploadMimePrefix = [
   'data:application/pdf;base64,',
   'data:application/zip;base64,',
   'data:text/plain;base64,',
+  'data:text/markdown;base64,',
+  'data:application/msword;base64,',
+  'data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,',
   'data:application/json;base64,',
 ]
 
@@ -545,6 +787,7 @@ const createLocalUpload = ({ fileName, dataUrl, ownerId, ownerName, ownerEmail }
   store[uploadId] = {
     id: uploadId,
     fileName: String(fileName || 'attachment'),
+    url: `local://upload/${uploadId}`,
     dataUrl,
     sizeBytes,
     ownerId: ownerId || '',
@@ -1070,7 +1313,11 @@ export const localAdapter = {
         writeCourseManagementPermissionMatrix(payload)
         return payload
       }),
-    list: () => Promise.resolve(readManagedCourses()),
+    list: () =>
+      Promise.resolve().then(() => {
+        cleanupLocalStorageFootprint()
+        return readManagedCourses()
+      }),
     save: (payload) =>
       Promise.resolve().then(() => {
         const courses = readManagedCourses()
@@ -1454,6 +1701,8 @@ export const localAdapter = {
           },
         }
       }),
+    cleanupStorage: () =>
+      Promise.resolve().then(() => cleanupLocalStorageFootprint()),
   },
   quiz: {
     list: () => Promise.resolve(readQuizBank().map((quiz) => quizMeta(quiz))),
@@ -1585,6 +1834,310 @@ export const localAdapter = {
           userId: user?.id,
           forced: Boolean(payload?.forced),
         })
+      }),
+  },
+  uploads: {
+    create: (payload, user) =>
+      Promise.resolve().then(() => {
+        const upload = createLocalUpload({
+          fileName: payload?.fileName || 'upload',
+          dataUrl: String(payload?.dataUrl || ''),
+          ownerId: user?.id || '',
+          ownerName: user?.name || '',
+          ownerEmail: user?.email || '',
+        })
+        return {
+          id: upload.id,
+          fileName: upload.fileName,
+          url: upload.url || `local://upload/${upload.id}`,
+          sizeBytes: upload.sizeBytes || 0,
+          uploadedAt: upload.uploadedAt || new Date().toISOString(),
+        }
+      }),
+    getData: (uploadId) =>
+      Promise.resolve().then(() => {
+        const store = readUploadStore()
+        const upload = store[String(uploadId || '')]
+        if (!upload) {
+          const error = new Error('Upload not found.')
+          error.code = 'NOT_FOUND'
+          throw error
+        }
+        return {
+          id: upload.id,
+          fileName: upload.fileName,
+          sizeBytes: upload.sizeBytes,
+          dataUrl: upload.dataUrl,
+        }
+      }),
+    getUrl: (uploadId) =>
+      Promise.resolve({
+        id: String(uploadId || ''),
+        url: `local://upload/${String(uploadId || '')}`,
+        requiresAuth: true,
+      }),
+  },
+  certificates: {
+    listTemplates: (user) =>
+      Promise.resolve().then(() => {
+        const actor = user || getCurrentLocalUser() || {}
+        if (!canManageCertificate(actor)) {
+          const error = new Error('Forbidden')
+          error.code = 'FORBIDDEN'
+          throw error
+        }
+        const store = readCertificateStore()
+        return store.templates
+          .slice()
+          .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+      }),
+    getTemplate: (templateId, user) =>
+      Promise.resolve().then(() => {
+        const actor = user || getCurrentLocalUser() || {}
+        if (!canManageCertificate(actor)) {
+          const error = new Error('Forbidden')
+          error.code = 'FORBIDDEN'
+          throw error
+        }
+        const store = readCertificateStore()
+        const target = store.templates.find((item) => item.id === String(templateId || '').trim())
+        if (!target) {
+          const error = new Error('Template not found.')
+          error.code = 'NOT_FOUND'
+          throw error
+        }
+        return target
+      }),
+    saveTemplate: (payload, user) =>
+      Promise.resolve().then(() => {
+        const actor = user || getCurrentLocalUser() || {}
+        if (!canManageCertificate(actor)) {
+          const error = new Error('Forbidden')
+          error.code = 'FORBIDDEN'
+          throw error
+        }
+        const store = readCertificateStore()
+        const nowIso = new Date().toISOString()
+        const payloadId = String(payload?.id || '').trim()
+        const existing = payloadId ? store.templates.find((item) => item.id === payloadId) : null
+        const id = existing?.id || payloadId || createCertificateTemplateId(store.counters.template)
+        if (!existing && !payloadId) {
+          store.counters.template = Number(store.counters.template || 1) + 1
+        }
+        const normalized = normalizeCertificateTemplate({
+          ...payload,
+          id,
+          createdAt: existing?.createdAt || payload?.createdAt || nowIso,
+          updatedAt: nowIso,
+        })
+        if (!normalized.title) throw new Error('Title wajib diisi.')
+        if (!normalized.courseId) throw new Error('Course wajib dipilih.')
+        const idTaken = store.templates.some((item) => item.id === id && item.id !== existing?.id)
+        if (idTaken) {
+          const error = new Error('Template ID sudah digunakan.')
+          error.code = 'CONFLICT'
+          throw error
+        }
+        store.templates = existing
+          ? store.templates.map((item) => (item.id === id ? normalized : item))
+          : [normalized, ...store.templates]
+        writeCertificateStore(store)
+        return normalized
+      }),
+    removeTemplate: (templateId, user) =>
+      Promise.resolve().then(() => {
+        const actor = user || getCurrentLocalUser() || {}
+        if (!canManageCertificate(actor)) {
+          const error = new Error('Forbidden')
+          error.code = 'FORBIDDEN'
+          throw error
+        }
+        const id = String(templateId || '').trim()
+        const store = readCertificateStore()
+        const hasIssued = store.issuances.some((item) => item.templateId === id)
+        if (hasIssued) {
+          const error = new Error('Template sudah dipakai issuance, tidak dapat dihapus.')
+          error.code = 'CONFLICT'
+          throw error
+        }
+        const next = store.templates.filter((item) => item.id !== id)
+        if (next.length === store.templates.length) {
+          const error = new Error('Template not found.')
+          error.code = 'NOT_FOUND'
+          throw error
+        }
+        store.templates = next
+        writeCertificateStore(store)
+        return null
+      }),
+    duplicateTemplate: (templateId, user) =>
+      Promise.resolve().then(() => {
+        const actor = user || getCurrentLocalUser() || {}
+        if (!canManageCertificate(actor)) {
+          const error = new Error('Forbidden')
+          error.code = 'FORBIDDEN'
+          throw error
+        }
+        const id = String(templateId || '').trim()
+        const store = readCertificateStore()
+        const source = store.templates.find((item) => item.id === id)
+        if (!source) {
+          const error = new Error('Template not found.')
+          error.code = 'NOT_FOUND'
+          throw error
+        }
+        const duplicated = normalizeCertificateTemplate({
+          ...source,
+          id: createCertificateTemplateId(store.counters.template),
+          title: `${source.title} (Copy)`,
+          status: 'draft',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        })
+        store.counters.template = Number(store.counters.template || 1) + 1
+        store.templates = [duplicated, ...store.templates]
+        writeCertificateStore(store)
+        return duplicated
+      }),
+    listIssuance: (limit = 200, user) =>
+      Promise.resolve().then(() => {
+        const actor = user || getCurrentLocalUser() || {}
+        if (!canManageCertificate(actor)) {
+          const error = new Error('Forbidden')
+          error.code = 'FORBIDDEN'
+          throw error
+        }
+        const max = Math.max(1, Math.min(Number(limit || 200), 1000))
+        const store = readCertificateStore()
+        return store.issuances
+          .slice()
+          .sort((a, b) => String(b.issuedAt || '').localeCompare(String(a.issuedAt || '')))
+          .slice(0, max)
+      }),
+    issue: (payload, user) =>
+      Promise.resolve().then(() => {
+        const actor = user || getCurrentLocalUser() || {}
+        if (!canManageCertificate(actor)) {
+          const error = new Error('Forbidden')
+          error.code = 'FORBIDDEN'
+          throw error
+        }
+        const store = readCertificateStore()
+        const templateId = String(payload?.templateId || '').trim()
+        const template = store.templates.find((item) => item.id === templateId)
+        if (!template) {
+          const error = new Error('Template tidak ditemukan.')
+          error.code = 'NOT_FOUND'
+          throw error
+        }
+        if (template.status !== 'published') {
+          const error = new Error('Template harus published sebelum issue.')
+          error.code = 'CONFLICT'
+          throw error
+        }
+        const recipientName = String(payload?.recipientName || '').trim()
+        if (!recipientName) throw new Error('Nama penerima wajib diisi.')
+        const courseId = String(payload?.courseId || template.courseId || '').trim()
+        const certificateNumberSeq = Number(store.counters.certificate || 1)
+        const certificateNo = `${String(template.certificatePrefix || 'CRT').toUpperCase()}-${String(certificateNumberSeq).padStart(6, '0')}`
+        store.counters.certificate = certificateNumberSeq + 1
+        const issueId = createCertificateIssuanceId(store.counters.issuance)
+        store.counters.issuance = Number(store.counters.issuance || 1) + 1
+        const issuedAt = new Date().toISOString()
+        const expiryMs = Date.now() + Math.max(1, Number(template.validityDays || 365)) * 24 * 60 * 60 * 1000
+        const issued = normalizeCertificateIssuance({
+          id: issueId,
+          templateId: template.id,
+          templateTitle: template.title,
+          courseId,
+          courseTitle: resolveCourseTitleLocal(courseId),
+          recipientName,
+          recipientEmail: String(payload?.recipientEmail || '').trim().toLowerCase(),
+          certificateNo,
+          verificationCode: createVerificationCode(certificateNo),
+          issuedAt,
+          expiresAt: new Date(expiryMs).toISOString(),
+          status: 'issued',
+          score: Number.isFinite(Number(payload?.score)) ? Number(payload.score) : null,
+          issuedBy: {
+            id: actor?.id || '',
+            name: actor?.name || actor?.email || 'Instructor',
+            email: actor?.email || '',
+          },
+        })
+        store.issuances = [issued, ...store.issuances]
+        writeCertificateStore(store)
+        return issued
+      }),
+    revoke: (issuanceId, payload, user) =>
+      Promise.resolve().then(() => {
+        const actor = user || getCurrentLocalUser() || {}
+        if (!canManageCertificate(actor)) {
+          const error = new Error('Forbidden')
+          error.code = 'FORBIDDEN'
+          throw error
+        }
+        const id = String(issuanceId || '').trim()
+        const store = readCertificateStore()
+        const target = store.issuances.find((item) => item.id === id)
+        if (!target) {
+          const error = new Error('Issuance not found.')
+          error.code = 'NOT_FOUND'
+          throw error
+        }
+        const revoked = {
+          ...target,
+          status: 'revoked',
+          revokedAt: new Date().toISOString(),
+          revokedReason: String(payload?.reason || '').trim(),
+        }
+        store.issuances = store.issuances.map((item) => (item.id === id ? revoked : item))
+        writeCertificateStore(store)
+        return revoked
+      }),
+    verify: (lookupCode) =>
+      Promise.resolve().then(() => {
+        const code = String(lookupCode || '').trim().toLowerCase()
+        if (!code) {
+          const error = new Error('Verification code is required.')
+          error.code = 'VALIDATION'
+          throw error
+        }
+        const store = readCertificateStore()
+        const issuance = store.issuances.find((item) => {
+          const byCode = String(item.verificationCode || '').toLowerCase() === code
+          const byNo = String(item.certificateNo || '').toLowerCase() === code
+          return byCode || byNo
+        })
+        if (!issuance) {
+          const error = new Error('Certificate not found.')
+          error.code = 'NOT_FOUND'
+          throw error
+        }
+        const template = store.templates.find((item) => item.id === issuance.templateId) || null
+        const expiresAtMs = issuance.expiresAt ? Date.parse(issuance.expiresAt) : Number.NaN
+        const isExpired = Number.isFinite(expiresAtMs) && Date.now() > expiresAtMs
+        const state = issuance.status === 'revoked' ? 'revoked' : isExpired ? 'expired' : 'valid'
+        return {
+          status: state,
+          issuance,
+          template,
+        }
+      }),
+    getStoreStats: (user) =>
+      Promise.resolve().then(() => {
+        const actor = user || getCurrentLocalUser() || {}
+        if (!canManageCertificate(actor)) {
+          const error = new Error('Forbidden')
+          error.code = 'FORBIDDEN'
+          throw error
+        }
+        const store = readCertificateStore()
+        return {
+          schemaVersion: store.schemaVersion,
+          templates: store.templates.length,
+          issuances: store.issuances.length,
+        }
       }),
   },
   meta: {

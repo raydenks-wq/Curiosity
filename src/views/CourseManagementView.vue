@@ -2,9 +2,9 @@
   <section class="quiz-admin-layout course-mgmt-layout">
     <article class="card quiz-admin-list course-mgmt-list">
       <p class="visually-hidden" aria-live="polite">{{ a11yLiveMessage }}</p>
-      <div class="section-header">
+      <div class="section-header course-mgmt-header">
         <h2>Course Management</h2>
-        <div class="table-actions">
+        <div class="table-actions course-mgmt-header-actions">
           <button v-if="canImportExportCourse" class="ghost-btn" type="button" @click="triggerImport" :disabled="isImporting">
             {{ isImporting ? 'Importing...' : 'Import JSON' }}
           </button>
@@ -23,11 +23,16 @@
         <span class="pill" :class="{ 'pill-danger': !permissions.delete }">delete: {{ permissions.delete ? 'yes' : 'no' }}</span>
       </div>
       <input ref="importInputRef" class="hidden-input" type="file" accept="application/json,.json" @change="handleImportFile" />
-      <article v-if="canImportExportCourse" class="assignment-policy-card">
+      <article v-if="canImportExportCourse" class="assignment-policy-card course-import-options-card">
         <h4>Import Options</h4>
         <div class="cm-lesson-toggle-row">
           <label class="quiz-select-page"><input v-model="importOptions.dryRun" type="checkbox" /> Dry run (tanpa simpan)</label>
           <label class="quiz-select-page"><input v-model="importOptions.atomic" type="checkbox" /> Atomic (rollback jika ada error)</label>
+        </div>
+        <div class="table-actions">
+          <button class="ghost-btn danger-btn" type="button" :disabled="isStorageCleanupRunning" @click="runStorageCleanup">
+            {{ isStorageCleanupRunning ? 'Cleaning...' : 'Cleanup Storage' }}
+          </button>
         </div>
       </article>
 
@@ -83,7 +88,6 @@
               {{ course.moduleCount }} modules · {{ course.lessonCount }} lessons · {{ course.durationTotal }}m · {{ course.assetCount }} assets ·
               {{ course.prerequisiteCount || 0 }} prereq
             </span>
-            <span class="pill">{{ course.category }} · {{ course.level }}</span>
           </button>
           <div class="quiz-admin-item-actions">
             <span class="status-pill" :class="statusClass(course.status)">{{ course.status }}</span>
@@ -91,6 +95,7 @@
               {{ course.status === 'published' ? 'Unpublish' : 'Publish' }}
             </button>
           </div>
+          <span class="pill course-level-pill">{{ course.category }} · {{ course.level }}</span>
         </article>
       </div>
 
@@ -140,6 +145,10 @@
       <div class="quiz-editor-toolbar">
         <h3>{{ editor.id ? 'Edit Course' : 'Create Course' }}</h3>
         <div class="table-actions quiz-editor-actions">
+          <label class="quiz-select-page">
+            <input v-model="showAdvancedInputs" type="checkbox" aria-label="Advanced Mode" />
+            Advanced Mode
+          </label>
           <button class="ghost-btn" type="button" @click="isPreviewMode = !isPreviewMode">
             {{ isPreviewMode ? 'Back to Edit' : 'Student Preview' }}
           </button>
@@ -161,14 +170,6 @@
           <button class="ghost-btn" type="button" :disabled="!pendingConflictDraft" @click="reapplyConflictDraft">Reapply Local Draft</button>
         </div>
       </article>
-      <div class="table-actions">
-        <label class="quiz-select-page">
-          <input v-model="showAdvancedInputs" type="checkbox" aria-label="Advanced Mode" />
-          Advanced
-        </label>
-        <span class="muted">{{ showAdvancedInputs ? 'Semua field ditampilkan.' : 'Mode basic: hanya field wajib untuk memulai course.' }}</span>
-      </div>
-
       <article v-if="validationMessages.length" class="quiz-admin-validation">
         <strong>Course belum memenuhi checklist publish</strong>
         <ul>
@@ -218,7 +219,7 @@
           <form class="form-grid compact quiz-admin-form" @submit.prevent="saveCourse">
             <label class="quiz-input-group">
               <span class="quiz-input-label">Slug</span>
-              <input v-model="editor.slug" class="quiz-input" type="text" placeholder="ui-design-fundamentals" />
+              <input :value="editor.slug" class="quiz-input" type="text" placeholder="ui-design-fundamentals" readonly />
               <small v-if="basicFieldErrors.slug" class="fail">{{ basicFieldErrors.slug }}</small>
             </label>
             <label class="quiz-input-group full">
@@ -226,23 +227,29 @@
               <input v-model="editor.title" class="quiz-input" type="text" required />
               <small v-if="basicFieldErrors.title" class="fail">{{ basicFieldErrors.title }}</small>
             </label>
-            <label v-if="showAdvancedInputs" class="quiz-input-group">
+            <label class="quiz-input-group">
               <span class="quiz-input-label">Course ID</span>
               <input v-model="editor.id" class="quiz-input" type="text" placeholder="auto from slug if empty" />
             </label>
-            <label v-if="showAdvancedInputs" class="quiz-input-group full">
+            <label class="quiz-input-group full">
               <span class="quiz-input-label">Description</span>
               <textarea v-model="editor.description" class="quiz-input" rows="3" placeholder="Course description..."></textarea>
             </label>
-            <label v-if="showAdvancedInputs" class="quiz-input-group full">
+            <label class="quiz-input-group full">
               <span class="quiz-input-label">Thumbnail URL</span>
               <input v-model="editor.thumbnail" class="quiz-input" type="url" placeholder="https://..." />
+              <input ref="thumbnailInputRef" class="hidden-input" type="file" accept="image/png,image/jpeg,image/jpg,image/webp,image/gif" @change="handleThumbnailFileChange" />
+              <div class="table-actions">
+                <button class="ghost-btn" type="button" @click="triggerThumbnailUpload">Upload Image</button>
+                <button class="ghost-btn" type="button" :disabled="!editor.thumbnail" @click="clearThumbnail">Clear</button>
+              </div>
+              <img v-if="thumbnailPreviewSrc" :src="thumbnailPreviewSrc" alt="Thumbnail preview" class="cm-thumbnail-preview" />
             </label>
-            <label v-if="showAdvancedInputs" class="quiz-input-group">
+            <label class="quiz-input-group">
               <span class="quiz-input-label">Category</span>
               <input v-model="editor.category" class="quiz-input" type="text" placeholder="Design" />
             </label>
-            <label v-if="showAdvancedInputs" class="quiz-input-group">
+            <label class="quiz-input-group">
               <span class="quiz-input-label">Level</span>
               <select v-model="editor.level" class="quiz-input">
                 <option value="beginner">Beginner</option>
@@ -250,14 +257,14 @@
                 <option value="advanced">Advanced</option>
               </select>
             </label>
-            <label v-if="showAdvancedInputs" class="quiz-input-group">
+            <label class="quiz-input-group">
               <span class="quiz-input-label">Language</span>
               <select v-model="editor.language" class="quiz-input">
                 <option value="id">Bahasa Indonesia</option>
                 <option value="en">English</option>
               </select>
             </label>
-            <label v-if="showAdvancedInputs" class="quiz-input-group">
+            <label class="quiz-input-group">
               <span class="quiz-input-label">Visibility</span>
               <select v-model="editor.visibility" class="quiz-input">
                 <option value="public">Public</option>
@@ -266,7 +273,7 @@
               </select>
             </label>
           </form>
-          <div v-if="!showAdvancedInputs" class="table-actions">
+          <div v-if="!showAdvancedInputs" class="table-actions cm-basic-next-actions">
             <button class="primary-btn" type="button" :disabled="!!basicFieldErrors.slug || !!basicFieldErrors.title" @click="goToBasicStep(2)">Next: Curriculum</button>
           </div>
         </section>
@@ -300,7 +307,7 @@
                 </div>
               </div>
               <div class="form-grid compact">
-                <label v-if="showAdvancedInputs">
+                <label>
                   <span class="quiz-input-label">Module ID</span>
                   <input v-model="module.id" class="quiz-input" type="text" />
                 </label>
@@ -309,7 +316,7 @@
                   <input v-model="module.title" class="quiz-input" type="text" />
                   <small v-if="moduleIndex === 0 && basicFieldErrors.moduleTitle" class="fail">{{ basicFieldErrors.moduleTitle }}</small>
                 </label>
-                <label v-if="showAdvancedInputs" class="full">
+                <label class="full">
                   <span class="quiz-input-label">Description</span>
                   <textarea v-model="module.description" class="quiz-input" rows="2"></textarea>
                 </label>
@@ -339,7 +346,7 @@
                   </div>
 
                   <div class="form-grid compact">
-                    <label v-if="showAdvancedInputs">
+                    <label>
                       <span class="quiz-input-label">Lesson ID</span>
                       <input v-model="lesson.id" class="quiz-input" type="text" />
                     </label>
@@ -350,7 +357,7 @@
                     </label>
                     <label>
                       <span class="quiz-input-label">Type</span>
-                      <select v-model="lesson.type" class="quiz-input">
+                      <select v-model="lesson.type" class="quiz-input" @change="onLessonTypeChange(lesson)">
                         <option value="video">Video</option>
                         <option value="article">Article</option>
                         <option value="quiz">Quiz</option>
@@ -363,12 +370,112 @@
                       <input v-model.number="lesson.durationMin" class="quiz-input" type="number" min="1" />
                       <small v-if="moduleIndex === 0 && lessonIndex === 0 && basicFieldErrors.lessonDuration" class="fail">{{ basicFieldErrors.lessonDuration }}</small>
                     </label>
-                    <label v-if="showAdvancedInputs" class="full">
-                      <span class="quiz-input-label">Content URL</span>
-                      <input v-model="lesson.contentUrl" class="quiz-input" type="url" placeholder="https://..." />
-                    </label>
+                    <section class="cm-lesson-type-config full">
+                      <div class="cm-lesson-type-config-head">
+                        <span class="quiz-input-label">Type Configuration</span>
+                        <span class="pill">{{ lesson.type }}</span>
+                      </div>
+                      <div class="form-grid compact">
+                        <label v-if="lesson.type === 'video'" class="full">
+                          <span class="quiz-input-label">Video URL</span>
+                          <input v-model="lesson.videoUrl" class="quiz-input" type="url" placeholder="https://..." @input="syncLessonPrimaryUrl(lesson)" />
+                        </label>
+                        <label v-if="lesson.type === 'video'" class="full">
+                          <span class="quiz-input-label">Transcript URL</span>
+                          <input v-model="lesson.transcriptUrl" class="quiz-input" type="url" placeholder="https://..." />
+                        </label>
+
+                        <label v-if="lesson.type === 'article'" class="full">
+                          <span class="quiz-input-label">Article Content</span>
+                          <textarea v-model="lesson.articleContent" class="quiz-input" rows="3" placeholder="Ringkasan atau isi artikel..."></textarea>
+                        </label>
+                        <label v-if="lesson.type === 'article'" class="full">
+                          <span class="quiz-input-label">Reference URL</span>
+                          <input v-model="lesson.articleReferenceUrl" class="quiz-input" type="url" placeholder="https://..." @input="syncLessonPrimaryUrl(lesson)" />
+                        </label>
+                        <label v-if="lesson.type === 'article'" class="full">
+                          <span class="quiz-input-label">Article File</span>
+                          <input
+                            :ref="(el) => setArticleFileInputRef(moduleIndex, lessonIndex, el)"
+                            class="hidden-input"
+                            type="file"
+                            accept=".pdf,.txt,.md,.doc,.docx,application/pdf,text/plain,text/markdown,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                            @change="onArticleFileChange($event, lesson)"
+                          />
+                          <div class="table-actions">
+                            <button class="ghost-btn" type="button" @click="triggerArticleUpload(moduleIndex, lessonIndex)">Upload Article</button>
+                            <button class="ghost-btn" type="button" :disabled="!lesson.articleAttachmentId && !lesson.articleAttachmentUrl" @click="clearArticleAttachment(lesson, moduleIndex, lessonIndex)">
+                              Remove File
+                            </button>
+                          </div>
+                          <small v-if="lesson.articleAttachmentName" class="muted">Attached: {{ lesson.articleAttachmentName }}</small>
+                        </label>
+
+                        <label v-if="lesson.type === 'quiz'" class="full">
+                          <span class="quiz-input-label">Quiz ID</span>
+                          <select v-model="lesson.quizId" class="quiz-input">
+                            <option value="">Pilih quiz...</option>
+                            <option v-for="quiz in publishedQuizOptions" :key="`quiz-option-${quiz.id}`" :value="quiz.id">
+                              {{ quiz.title || quiz.id }} ({{ quiz.id }})
+                            </option>
+                          </select>
+                          <small v-if="!publishedQuizOptions.length" class="muted">Belum ada quiz published. Buat dulu di Manage Quiz.</small>
+                          <div class="table-actions">
+                            <button class="ghost-btn" type="button" @click="openQuizManagement">Manage Quiz</button>
+                            <button class="ghost-btn" type="button" :disabled="!lesson.quizId" @click="openLinkedQuiz(lesson)">Open Quiz View</button>
+                          </div>
+                        </label>
+                        <label v-if="lesson.type === 'quiz'">
+                          <span class="quiz-input-label">Passing Score (%)</span>
+                          <input v-model.number="lesson.quizPassingScore" class="quiz-input" type="number" min="0" max="100" />
+                        </label>
+                        <label v-if="lesson.type === 'quiz'">
+                          <span class="quiz-input-label">Timer (minutes)</span>
+                          <input v-model.number="lesson.quizTimerMin" class="quiz-input" type="number" min="0" />
+                        </label>
+
+                        <label v-if="lesson.type === 'assignment'" class="full">
+                          <span class="quiz-input-label">Assignment Instruction</span>
+                          <textarea v-model="lesson.assignmentInstruction" class="quiz-input" rows="3" placeholder="Instruksi tugas..."></textarea>
+                        </label>
+                        <label v-if="lesson.type === 'assignment'">
+                          <span class="quiz-input-label">Submission Mode</span>
+                          <select v-model="lesson.assignmentMode" class="quiz-input">
+                            <option value="file">File</option>
+                            <option value="link">Link</option>
+                            <option value="text">Text</option>
+                          </select>
+                        </label>
+                        <label v-if="lesson.type === 'assignment'">
+                          <span class="quiz-input-label">Due Date</span>
+                          <input v-model="lesson.assignmentDueAt" class="quiz-input" type="datetime-local" />
+                        </label>
+                        <label v-if="lesson.type === 'assignment'" class="full">
+                          <span class="quiz-input-label">Resource URL</span>
+                          <input v-model="lesson.assignmentResourceUrl" class="quiz-input" type="url" placeholder="https://..." @input="syncLessonPrimaryUrl(lesson)" />
+                        </label>
+
+                        <label v-if="lesson.type === 'live'" class="full">
+                          <span class="quiz-input-label">Meeting URL</span>
+                          <input v-model="lesson.liveMeetingUrl" class="quiz-input" type="url" placeholder="https://..." @input="syncLessonPrimaryUrl(lesson)" />
+                        </label>
+                        <label v-if="lesson.type === 'live'">
+                          <span class="quiz-input-label">Session Start</span>
+                          <input v-model="lesson.liveStartAt" class="quiz-input" type="datetime-local" />
+                        </label>
+                        <label v-if="lesson.type === 'live'">
+                          <span class="quiz-input-label">Timezone</span>
+                          <input v-model="lesson.liveTimezone" class="quiz-input" type="text" placeholder="Asia/Jakarta" />
+                        </label>
+
+                        <label class="full">
+                          <span class="quiz-input-label">Content URL (Primary)</span>
+                          <input v-model="lesson.contentUrl" class="quiz-input" type="url" placeholder="https://..." />
+                        </label>
+                      </div>
+                    </section>
                   </div>
-                  <div v-if="showAdvancedInputs" class="cm-lesson-toggle-row">
+                  <div class="cm-lesson-toggle-row">
                     <label class="quiz-select-page"><input v-model="lesson.isPreview" type="checkbox" /> Preview lesson</label>
                     <label class="quiz-select-page"><input v-model="lesson.isLocked" type="checkbox" /> Locked by default</label>
                   </div>
@@ -378,7 +485,7 @@
               <button class="ghost-btn" type="button" :disabled="!canEditCourse" @click="addLesson(moduleIndex)">+ Add Lesson</button>
             </article>
           </div>
-          <div v-if="!showAdvancedInputs" class="table-actions">
+          <div v-if="!showAdvancedInputs" class="table-actions cm-basic-curriculum-actions">
             <button class="ghost-btn" type="button" @click="goToBasicStep(1)">Back: Info</button>
             <button class="primary-btn" type="button" :disabled="Object.keys(basicFieldErrors).length > 0" @click="goToBasicStep(3)">Next: Review</button>
           </div>
@@ -1193,13 +1300,14 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { onBeforeRouteLeave } from 'vue-router'
+import { onBeforeRouteLeave, useRouter } from 'vue-router'
 import { apiClient } from '../services/api/client'
 import { useCourseManagementStore } from '../stores/courseManagement'
 import { useProfileStore } from '../stores/profile'
 import { useToastStore } from '../stores/toast'
 
 const courseStore = useCourseManagementStore()
+const router = useRouter()
 const profileStore = useProfileStore()
 const toastStore = useToastStore()
 const { courseSummaries, editor, isLoading, isSaving, auditLogs, permissions, revisions, revisionsLoading } = storeToRefs(courseStore)
@@ -1221,11 +1329,16 @@ const autosaveErrorShown = ref(false)
 const lastSavedHash = ref('')
 const selectedIds = ref([])
 const importInputRef = ref(null)
+const thumbnailInputRef = ref(null)
+const thumbnailPreviewSrc = ref('')
+const articleFileInputRefs = ref({})
+const quizCatalogOptions = ref([])
 const focusedDependencyNodeId = ref('')
 const dependencyNodeQuery = ref('')
 const dependencyViewMode = ref('all')
 const isImporting = ref(false)
 const isBulkBusy = ref(false)
+const isStorageCleanupRunning = ref(false)
 const importReport = ref(null)
 const a11yLiveMessage = ref('')
 const a11yTimerId = ref(null)
@@ -1473,6 +1586,20 @@ const localeOptions = computed(() => {
   const locales = Array.isArray(editor.value.settings?.locales) && editor.value.settings.locales.length ? editor.value.settings.locales : ['id']
   return [...new Set(locales.map((item) => String(item || 'id').toLowerCase()))]
 })
+const publishedQuizOptions = computed(() =>
+  (Array.isArray(quizCatalogOptions.value) ? quizCatalogOptions.value : [])
+    .filter((quiz) => String(quiz.status || 'published') === 'published')
+    .sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''))),
+)
+const toSlug = (value) =>
+  String(value || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+
 const prerequisiteCourseOptions = computed(() => {
   const selectedSet = new Set(editor.value.settings?.prerequisiteCourseIds || [])
   return courseSummaries.value
@@ -3070,6 +3197,235 @@ const handleImportFile = async (event) => {
   }
 }
 
+const triggerThumbnailUpload = () => {
+  thumbnailInputRef.value?.click()
+}
+
+const extractLocalUploadId = (value) => {
+  const text = String(value || '').trim()
+  const match = text.match(/^local:\/\/upload\/(.+)$/i)
+  return match?.[1] || ''
+}
+
+const resolveThumbnailPreview = async () => {
+  const thumb = String(editor.value.thumbnail || '').trim()
+  if (!thumb) {
+    thumbnailPreviewSrc.value = ''
+    return
+  }
+  if (thumb.startsWith('data:image/')) {
+    thumbnailPreviewSrc.value = thumb
+    return
+  }
+  const localUploadId = extractLocalUploadId(thumb) || String(editor.value.thumbnailUploadId || '').trim()
+  if (localUploadId && apiClient.courses?.getAttachmentData) {
+    try {
+      const payload = await apiClient.courses.getAttachmentData(localUploadId)
+      thumbnailPreviewSrc.value = String(payload?.dataUrl || '')
+      return
+    } catch {
+      thumbnailPreviewSrc.value = ''
+      return
+    }
+  }
+  thumbnailPreviewSrc.value = thumb
+}
+
+const clearThumbnail = () => {
+  editor.value.thumbnail = ''
+  editor.value.thumbnailUploadId = ''
+  thumbnailPreviewSrc.value = ''
+  if (thumbnailInputRef.value) thumbnailInputRef.value.value = ''
+}
+
+const handleThumbnailFileChange = async (event) => {
+  const file = event.target?.files?.[0]
+  if (!file) return
+  const allowed = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif']
+  if (!allowed.includes(String(file.type || '').toLowerCase())) {
+    pushManagedToast({
+      type: 'error',
+      title: 'Format tidak didukung',
+      message: 'Gunakan PNG, JPG, WEBP, atau GIF.',
+    })
+    if (event.target) event.target.value = ''
+    return
+  }
+  const maxBytes = 5 * 1024 * 1024
+  if (Number(file.size || 0) > maxBytes) {
+    pushManagedToast({
+      type: 'error',
+      title: 'File terlalu besar',
+      message: 'Ukuran maksimal thumbnail 5MB.',
+    })
+    if (event.target) event.target.value = ''
+    return
+  }
+  try {
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result || ''))
+      reader.onerror = () => reject(new Error('Gagal membaca file gambar.'))
+      reader.readAsDataURL(file)
+    })
+    if (apiClient.uploads?.create) {
+      const uploaded = await apiClient.uploads.create({
+        fileName: file.name || 'thumbnail',
+        dataUrl: String(dataUrl || ''),
+        purpose: 'course-thumbnail',
+      })
+      editor.value.thumbnailUploadId = String(uploaded?.id || '')
+      editor.value.thumbnail = String(uploaded?.url || '')
+      thumbnailPreviewSrc.value = String(dataUrl || '')
+    } else {
+      editor.value.thumbnailUploadId = ''
+      editor.value.thumbnail = String(dataUrl || '')
+      thumbnailPreviewSrc.value = String(dataUrl || '')
+    }
+    pushManagedToast({
+      type: 'success',
+      title: 'Thumbnail updated',
+      message: `${file.name} berhasil dipakai sebagai thumbnail.`,
+    })
+  } catch (error) {
+    pushManagedToast({
+      type: 'error',
+      title: 'Upload gagal',
+      message: error?.message || 'Gagal memproses gambar.',
+    })
+  } finally {
+    if (event.target) event.target.value = ''
+  }
+}
+
+const setArticleFileInputRef = (moduleIndex, lessonIndex, element) => {
+  const key = `${moduleIndex}-${lessonIndex}`
+  if (!element) {
+    delete articleFileInputRefs.value[key]
+    return
+  }
+  articleFileInputRefs.value[key] = element
+}
+
+const triggerArticleUpload = (moduleIndex, lessonIndex) => {
+  const key = `${moduleIndex}-${lessonIndex}`
+  articleFileInputRefs.value[key]?.click()
+}
+
+const clearArticleAttachment = (lesson, moduleIndex, lessonIndex) => {
+  if (!lesson) return
+  lesson.articleAttachmentId = ''
+  lesson.articleAttachmentUrl = ''
+  lesson.articleAttachmentName = ''
+  const key = `${moduleIndex}-${lessonIndex}`
+  if (articleFileInputRefs.value[key]) {
+    articleFileInputRefs.value[key].value = ''
+  }
+}
+
+const onArticleFileChange = async (event, lesson) => {
+  const file = event.target?.files?.[0]
+  if (!file || !lesson) return
+  const maxBytes = 8 * 1024 * 1024
+  if (Number(file.size || 0) > maxBytes) {
+    pushManagedToast({
+      type: 'error',
+      title: 'File terlalu besar',
+      message: 'Ukuran maksimal file artikel 8MB.',
+    })
+    if (event.target) event.target.value = ''
+    return
+  }
+  try {
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result || ''))
+      reader.onerror = () => reject(new Error('Gagal membaca file artikel.'))
+      reader.readAsDataURL(file)
+    })
+    if (apiClient.uploads?.create) {
+      const uploaded = await apiClient.uploads.create({
+        fileName: file.name || 'article-attachment',
+        dataUrl: String(dataUrl || ''),
+        purpose: 'lesson-article',
+      })
+      lesson.articleAttachmentId = String(uploaded?.id || '')
+      lesson.articleAttachmentUrl = String(uploaded?.url || '')
+    } else {
+      lesson.articleAttachmentId = ''
+      lesson.articleAttachmentUrl = ''
+    }
+    lesson.articleAttachmentName = String(file.name || 'article-attachment')
+    pushManagedToast({
+      type: 'success',
+      title: 'Article uploaded',
+      message: `${file.name} berhasil ditautkan ke lesson article.`,
+    })
+  } catch (error) {
+    pushManagedToast({
+      type: 'error',
+      title: 'Upload gagal',
+      message: error?.message || 'Gagal memproses file artikel.',
+    })
+  } finally {
+    if (event.target) event.target.value = ''
+  }
+}
+
+const openLinkedQuiz = (lesson) => {
+  const quizId = String(lesson?.quizId || '').trim()
+  if (!quizId) {
+    pushManagedToast({
+      type: 'info',
+      title: 'Quiz belum dipilih',
+      message: 'Pilih Quiz ID dulu sebelum membuka Quiz View.',
+    })
+    return
+  }
+  router.push({
+    name: 'quiz',
+    params: { id: quizId },
+    query: {
+      course: String(editor.value.id || ''),
+      source: 'lesson-quiz',
+    },
+  })
+}
+
+const openQuizManagement = () => {
+  router.push({ name: 'quiz-admin' })
+}
+
+const formatBytesCompact = (value) => {
+  const bytes = Math.max(0, Number(value || 0))
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${Math.round(bytes)} B`
+}
+
+const runStorageCleanup = async () => {
+  if (!apiClient.courseManagement?.cleanupStorage || isStorageCleanupRunning.value) return
+  isStorageCleanupRunning.value = true
+  try {
+    const result = await apiClient.courseManagement.cleanupStorage()
+    pushManagedToast({
+      type: 'success',
+      title: 'Storage cleanup selesai',
+      message: `${result?.prunedInlineDataUrlCount || 0} inline blob dibersihkan, ${result?.removedUploads || 0} upload orphan dihapus, reclaim ${formatBytesCompact(result?.reclaimedCourseBytes || 0)}.`,
+    })
+    courseStore.loaded = false
+    await courseStore.load()
+  } catch (error) {
+    pushManagedToast({
+      type: 'error',
+      title: 'Cleanup gagal',
+      message: error?.message || 'Tidak bisa membersihkan storage.',
+    })
+  } finally {
+    isStorageCleanupRunning.value = false
+  }
+}
+
 const requestCancelOperation = () => {
   operationState.value.cancelRequested = true
   announceA11y('Permintaan cancel sedang diproses.')
@@ -3085,6 +3441,42 @@ const requestCancelOperation = () => {
     },
     'warning',
   )
+}
+
+const syncLessonPrimaryUrl = (lesson) => {
+  if (!lesson || typeof lesson !== 'object') return
+  const type = String(lesson.type || 'video')
+  if (type === 'video') {
+    lesson.contentUrl = String(lesson.videoUrl || '').trim()
+    return
+  }
+  if (type === 'article') {
+    lesson.contentUrl = String(lesson.articleReferenceUrl || '').trim()
+    return
+  }
+  if (type === 'assignment') {
+    lesson.contentUrl = String(lesson.assignmentResourceUrl || '').trim()
+    return
+  }
+  if (type === 'live') {
+    lesson.contentUrl = String(lesson.liveMeetingUrl || '').trim()
+    return
+  }
+  if (type === 'quiz') {
+    lesson.contentUrl = ''
+  }
+}
+
+const onLessonTypeChange = (lesson) => {
+  if (!lesson || typeof lesson !== 'object') return
+  if (lesson.type === 'quiz') {
+    lesson.quizPassingScore = Number.isFinite(Number(lesson.quizPassingScore)) ? Number(lesson.quizPassingScore) : 70
+    lesson.quizTimerMin = Number.isFinite(Number(lesson.quizTimerMin)) ? Number(lesson.quizTimerMin) : 0
+  }
+  if (lesson.type === 'live' && !String(lesson.liveTimezone || '').trim()) {
+    lesson.liveTimezone = 'Asia/Jakarta'
+  }
+  syncLessonPrimaryUrl(lesson)
 }
 
 const addAsset = () => {
@@ -3199,6 +3591,17 @@ watch(
 )
 
 watch(
+  () => editor.value.title,
+  (title) => {
+    const nextSlug = toSlug(title)
+    if (editor.value.slug !== nextSlug) {
+      editor.value.slug = nextSlug
+    }
+  },
+  { immediate: true },
+)
+
+watch(
   () => editor.value.id,
   () => {
     focusedDependencyNodeId.value = ''
@@ -3218,6 +3621,19 @@ watch(
     }
     revisionDiffBaseId.value = '__current__'
     revisionDiffTargetId.value = revisions.value[0]?.id || '__current__'
+    resolveThumbnailPreview().catch(() => {})
+  },
+  { immediate: true },
+)
+
+watch(
+  () => [editor.value.thumbnail, editor.value.thumbnailUploadId],
+  ([thumbnail]) => {
+    const thumb = String(thumbnail || '').trim()
+    if (!extractLocalUploadId(thumb) && !thumb.startsWith('data:') && editor.value.thumbnailUploadId) {
+      editor.value.thumbnailUploadId = ''
+    }
+    resolveThumbnailPreview().catch(() => {})
   },
   { immediate: true },
 )
@@ -3350,7 +3766,24 @@ onMounted(async () => {
     // ignore
   }
   try {
+    if (apiClient.courseManagement?.cleanupStorage) {
+      const cleanupResult = await apiClient.courseManagement.cleanupStorage()
+      if ((cleanupResult?.prunedInlineDataUrlCount || 0) > 0 || (cleanupResult?.removedUploads || 0) > 0) {
+        pushManagedToast({
+          type: 'info',
+          title: 'Storage optimized',
+          message: `${cleanupResult.prunedInlineDataUrlCount} data inline lama dibersihkan. Reclaim ${formatBytesCompact(cleanupResult.reclaimedCourseBytes || 0)}.`,
+        })
+      }
+    }
     await Promise.all([courseStore.load(), profileStore.load()])
+    if (apiClient.quiz?.list) {
+      try {
+        quizCatalogOptions.value = await apiClient.quiz.list()
+      } catch {
+        quizCatalogOptions.value = []
+      }
+    }
     if (String(profile.value?.accessRole || '') === 'admin') {
       courseStore.loadPermissionMatrix().catch(() => {})
     }

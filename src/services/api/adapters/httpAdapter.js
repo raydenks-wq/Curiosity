@@ -453,6 +453,14 @@ export const httpAdapter = {
       httpClient.request(`/course-management/${encodeURIComponent(courseId)}/compliance-export`, {
         auth: true,
       }),
+    cleanupStorage: () =>
+      Promise.resolve({
+        prunedInlineDataUrlCount: 0,
+        removedUploads: 0,
+        beforeCourseBytes: 0,
+        afterCourseBytes: 0,
+        reclaimedCourseBytes: 0,
+      }),
   },
   quiz: {
     list: () =>
@@ -511,6 +519,74 @@ export const httpAdapter = {
         method: 'POST',
         auth: true,
         body: payload,
+      }),
+  },
+  uploads: {
+    create: (payload) =>
+      httpClient.request('/uploads', {
+        method: 'POST',
+        auth: true,
+        body: {
+          fileName: payload?.fileName || 'upload',
+          dataUrl: payload?.dataUrl || '',
+          purpose: payload?.purpose || 'course-media',
+        },
+      }),
+    getData: (uploadId) =>
+      httpClient.request(`/uploads/${encodeURIComponent(uploadId)}/data`, {
+        auth: true,
+      }),
+    getUrl: (uploadId) =>
+      httpClient.request(`/uploads/${encodeURIComponent(uploadId)}/url`, {
+        auth: true,
+      }),
+  },
+  certificates: {
+    listTemplates: () =>
+      httpClient.request('/certificates/templates', {
+        auth: true,
+      }),
+    getTemplate: (templateId) =>
+      httpClient.request(`/certificates/templates/${encodeURIComponent(templateId)}`, {
+        auth: true,
+      }),
+    saveTemplate: (payload) =>
+      httpClient.request('/certificates/templates', {
+        method: 'POST',
+        auth: true,
+        body: payload,
+      }),
+    removeTemplate: (templateId) =>
+      httpClient.request(`/certificates/templates/${encodeURIComponent(templateId)}`, {
+        method: 'DELETE',
+        auth: true,
+      }),
+    duplicateTemplate: (templateId) =>
+      httpClient.request(`/certificates/templates/${encodeURIComponent(templateId)}/duplicate`, {
+        method: 'POST',
+        auth: true,
+      }),
+    listIssuance: (limit = 200) =>
+      httpClient.request(`/certificates/issuances?limit=${encodeURIComponent(limit)}`, {
+        auth: true,
+      }),
+    issue: (payload) =>
+      httpClient.request('/certificates/issuances', {
+        method: 'POST',
+        auth: true,
+        body: payload,
+      }),
+    revoke: (issuanceId, payload = {}) =>
+      httpClient.request(`/certificates/issuances/${encodeURIComponent(issuanceId)}/revoke`, {
+        method: 'POST',
+        auth: true,
+        body: payload,
+      }),
+    verify: (lookupCode) =>
+      httpClient.request(`/certificates/verify/${encodeURIComponent(String(lookupCode || '').trim())}`),
+    getStoreStats: () =>
+      httpClient.request('/certificates/stats', {
+        auth: true,
       }),
   },
   meta: {

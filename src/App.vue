@@ -43,5 +43,5 @@ const transitionMap = {
 }
 
 const routeTransitionName = computed(() => transitionMap[currentTemplate.value] ?? 'route-mosaic')
-const isAppLayout = computed(() => route.name !== 'login')
+const isAppLayout = computed(() => !['login', 'certificate-verify'].includes(String(route.name || '')))
 </script>

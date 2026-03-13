@@ -95,7 +95,15 @@
 
       <template v-if="mode === 'edit'">
         <div class="quiz-editor-stepper">
-          <button class="ghost-btn" :class="{ active: activeStep === 'basic' }" type="button" @click="scrollToEditorSection('basic')">
+          <div
+            class="ghost-btn quiz-step-item"
+            :class="{ active: activeStep === 'basic' }"
+            role="button"
+            tabindex="0"
+            @click="scrollToEditorSection('basic')"
+            @keydown.enter.prevent="scrollToEditorSection('basic')"
+            @keydown.space.prevent="scrollToEditorSection('basic')"
+          >
             Basic Info
             <button
               class="step-badge"
@@ -105,8 +113,16 @@
             >
               {{ stepIssues.basic > 0 ? `${stepIssues.basic} err` : 'ok' }}
             </button>
-          </button>
-          <button class="ghost-btn" :class="{ active: activeStep === 'scoring' }" type="button" @click="scrollToEditorSection('scoring')">
+          </div>
+          <div
+            class="ghost-btn quiz-step-item"
+            :class="{ active: activeStep === 'scoring' }"
+            role="button"
+            tabindex="0"
+            @click="scrollToEditorSection('scoring')"
+            @keydown.enter.prevent="scrollToEditorSection('scoring')"
+            @keydown.space.prevent="scrollToEditorSection('scoring')"
+          >
             Scoring
             <button
               class="step-badge"
@@ -116,8 +132,16 @@
             >
               {{ stepIssues.scoring > 0 ? `${stepIssues.scoring} err` : 'ok' }}
             </button>
-          </button>
-          <button class="ghost-btn" :class="{ active: activeStep === 'questions' }" type="button" @click="scrollToEditorSection('questions')">
+          </div>
+          <div
+            class="ghost-btn quiz-step-item"
+            :class="{ active: activeStep === 'questions' }"
+            role="button"
+            tabindex="0"
+            @click="scrollToEditorSection('questions')"
+            @keydown.enter.prevent="scrollToEditorSection('questions')"
+            @keydown.space.prevent="scrollToEditorSection('questions')"
+          >
             Questions
             <button
               class="step-badge"
@@ -127,7 +151,7 @@
             >
               {{ stepIssues.questions > 0 ? `${stepIssues.questions} err` : 'ok' }}
             </button>
-          </button>
+          </div>
         </div>
         <article v-if="stepDetailOpen && stepDetailMessages.length" class="step-detail-popover">
           <p class="step-detail-title">{{ stepDetailTitle }}</p>

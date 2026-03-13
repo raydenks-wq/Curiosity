@@ -11,7 +11,15 @@
       </div>
 
       <nav class="menu menu-top" :class="{ open: isMenuOpen }">
-        <RouterLink v-for="item in primaryNavItems" :key="item.label" :to="item.to" class="menu-link" @click="closeMenus">
+        <RouterLink
+          v-for="item in primaryNavItems"
+          :key="item.label"
+          :to="item.to"
+          class="menu-link"
+          @mouseenter="prefetchNavTarget(item.to)"
+          @focus="prefetchNavTarget(item.to)"
+          @click="closeMenus"
+        >
           <span class="menu-icon">{{ item.icon }}</span>
           <span>{{ item.label }}</span>
         </RouterLink>
@@ -44,6 +52,8 @@
                 :to="item.to"
                 class="menu-submenu-link"
                 role="menuitem"
+                @mouseenter="prefetchNavTarget(item.to)"
+                @focus="prefetchNavTarget(item.to)"
                 @click="closeMenus"
               >
                 <span class="menu-icon">{{ item.icon }}</span>
@@ -115,6 +125,20 @@
                 params: { id: item.courseId },
                 query: { lesson: item.lessonId, tab: 'discussion', focusDiscussion: item.id },
               }"
+              @mouseenter="
+                prefetchNavTarget({
+                  name: 'course-detail',
+                  params: { id: item.courseId },
+                  query: { lesson: item.lessonId, tab: 'discussion', focusDiscussion: item.id },
+                })
+              "
+              @focus="
+                prefetchNavTarget({
+                  name: 'course-detail',
+                  params: { id: item.courseId },
+                  query: { lesson: item.lessonId, tab: 'discussion', focusDiscussion: item.id },
+                })
+              "
               @click="activePanel = null"
             >
               <strong>{{ item.authorName }} <span v-if="item.isMention" class="notif-mention-tag">@mention</span></strong>
@@ -143,7 +167,9 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRoute, useRouter } from 'vue-router'
+import { prefetchRouteComponents } from '../router'
 import { useTemplateSwitcher } from '../plugins/templateSwitcher'
+import { coursePlayerService } from '../services/coursePlayerService'
 import { useAuthStore } from '../stores/auth'
 import { useNotificationStore } from '../stores/notification'
 import { useProfileStore } from '../stores/profile'
@@ -156,25 +182,46 @@ const profileStore = useProfileStore()
 const notificationStore = useNotificationStore()
 const toastStore = useToastStore()
 const { profile } = storeToRefs(profileStore)
+const { initialized: authInitialized } = storeToRefs(authStore)
 const topnavRoot = ref(null)
 const isMenuOpen = ref(false)
 const activePanel = ref(null)
 
 const { templateOptions, currentTemplate, setTemplate } = useTemplateSwitcher()
 
-const primaryNavLabels = [
-  { label: 'Dashboard', to: '/' },
-  { label: 'Course View', to: '/courses/ui-101' },
-  { label: 'Quiz View', to: '/quiz/ui-101' },
-]
+const getUserScopeId = () => authStore.user?.id || authStore.user?.email || 'guest'
+const resolveQuizTarget = () => {
+  try {
+    const list = coursePlayerService.listCourses(getUserScopeId())
+    const firstCourseId = list[0]?.id ? String(list[0].id) : ''
+    return {
+      quiz: firstCourseId ? { name: 'quiz', params: { id: firstCourseId } } : { name: 'dashboard' },
+    }
+  } catch {
+    return {
+      quiz: { name: 'dashboard' },
+    }
+  }
+}
+
+const primaryNavLabels = computed(() => {
+  const targets = resolveQuizTarget()
+  return [
+    { label: 'Dashboard', to: { name: 'dashboard' } },
+    { label: 'Course View', to: { name: 'courses' } },
+    { label: 'Quiz View', to: targets.quiz },
+  ]
+})
 const managementNavByRole = {
   instructor: [
     { label: 'Manage Quiz', to: '/management/quizzes', name: 'quiz-admin' },
     { label: 'Manage Course', to: '/management/courses', name: 'course-management' },
+    { label: 'Manage Certificate', to: '/management/certificates', name: 'certificate-management' },
   ],
   admin: [
     { label: 'Manage Quiz', to: '/management/quizzes', name: 'quiz-admin' },
     { label: 'Manage Course', to: '/management/courses', name: 'course-management' },
+    { label: 'Manage Certificate', to: '/management/certificates', name: 'certificate-management' },
     { label: 'User Management', to: '/management/users', name: 'users' },
   ],
 }
@@ -186,25 +233,26 @@ const iconMap = {
 
 const primaryNavItems = computed(() => {
   const icons = iconMap[currentTemplate.value] ?? iconMap.sunrise
-  return primaryNavLabels.map((item, index) => ({
+  return primaryNavLabels.value.map((item, index) => ({
     ...item,
     icon: icons[index] ?? '•',
   }))
 })
 
 const managementNavItems = computed(() => {
-  const role = profile.value?.accessRole
+  if (!authInitialized.value) return []
+  const role = authStore.role
   const items = managementNavByRole[role] || []
   const icons = iconMap[currentTemplate.value] ?? iconMap.sunrise
   return items.map((item, index) => ({
     ...item,
-    icon: icons[index + primaryNavLabels.length] ?? '•',
+    icon: icons[index + primaryNavLabels.value.length] ?? '•',
   }))
 })
 
 const managementIcon = computed(() => {
   const icons = iconMap[currentTemplate.value] ?? iconMap.sunrise
-  return icons[primaryNavLabels.length] ?? '•'
+  return icons[primaryNavLabels.value.length] ?? '•'
 })
 
 const isManagementMenuOpen = ref(false)
@@ -312,6 +360,23 @@ const clearManagementCloseTimer = () => {
   managementCloseTimer.value = null
 }
 
+const prefetchNavTarget = (to) => {
+  prefetchRouteComponents(to).catch(() => {})
+}
+
+const runIdlePrefetch = () => {
+  const targets = resolveQuizTarget()
+  const commonTargets = [
+    { name: 'dashboard' },
+    { name: 'courses' },
+    targets.quiz,
+    ...managementNavItems.value.map((item) => item.to),
+  ]
+  commonTargets.forEach((target) => {
+    prefetchNavTarget(target)
+  })
+}
+
 const onClickOutside = (event) => {
   if (!topnavRoot.value?.contains(event.target)) {
     activePanel.value = null
@@ -335,6 +400,15 @@ onMounted(() => {
   profileStore.load()
   notificationStore.load()
   document.addEventListener('click', onClickOutside)
+  if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+    window.requestIdleCallback(() => {
+      runIdlePrefetch()
+    }, { timeout: 1500 })
+  } else {
+    window.setTimeout(() => {
+      runIdlePrefetch()
+    }, 700)
+  }
 })
 
 onBeforeUnmount(() => {

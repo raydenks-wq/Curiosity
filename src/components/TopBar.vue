@@ -1,7 +1,9 @@
 <template>
   <header class="topbar">
     <div>
-      <p class="eyebrow">Welcome back</p>
+      <p class="eyebrow">
+        Welcome back<span v-if="displayName">, <span class="topbar-user-name-inline">{{ displayName }}</span></span>
+      </p>
       <h1 class="headline">Platform Pembelajaran Interaktif</h1>
     </div>
 
@@ -24,8 +26,25 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { storeToRefs } from 'pinia'
+import { useAuthStore } from '../stores/auth'
+import { useProfileStore } from '../stores/profile'
 
 const ranges = ['Today', 'Week', 'Month']
 const selectedRange = ref('Week')
+const authStore = useAuthStore()
+const profileStore = useProfileStore()
+const { profile } = storeToRefs(profileStore)
+
+const displayName = computed(() => {
+  const authName = String(authStore.user?.name || '').trim()
+  if (authName) return authName
+  return String(profile.value?.name || '').trim()
+})
+
+onMounted(() => {
+  profileStore.load().catch(() => {})
+  profileStore.syncFromAuthUser(authStore.user)
+})
 </script>

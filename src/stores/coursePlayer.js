@@ -71,6 +71,10 @@ export const useCoursePlayerStore = defineStore('coursePlayer', {
         await this.flushPlaybackQueue()
         this.courses = await apiClient.courses.listCourses(this.getUserScopeId())
         this.continueLearning = await apiClient.courses.getContinueLearning(this.getAuthUser())
+      } catch (error) {
+        this.courses = []
+        this.continueLearning = null
+        throw error
       } finally {
         this.isLoadingList = false
       }
@@ -82,6 +86,9 @@ export const useCoursePlayerStore = defineStore('coursePlayer', {
         await this.flushPlaybackQueue(courseId)
         this.currentCourse = await apiClient.courses.getCourse(courseId, this.getUserScopeId())
         return this.currentCourse
+      } catch (error) {
+        this.currentCourse = null
+        throw error
       } finally {
         this.isLoadingCourse = false
       }

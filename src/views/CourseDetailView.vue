@@ -1,4 +1,5 @@
 <template>
+  <div class="course-detail-view-root">
   <section v-if="currentTemplate === 'sunrise'" class="course-player-layout">
     <article class="card course-player-card">
       <div class="lesson-stage" :style="{ background: currentCourse?.gradient || fallbackGradient }">
@@ -70,7 +71,7 @@
         <template v-if="activeTab === 'material'">
           <div id="lesson-panel-material" role="tabpanel" aria-labelledby="lesson-tab-material">
           <p class="lesson-summary">{{ activeLesson?.summary || 'Menyiapkan konten lesson...' }}</p>
-          <div v-if="activeLesson?.videoUrl" class="video-player-shell">
+          <div v-if="activeLesson?.type === 'video' && activeLesson?.videoUrl" class="video-player-shell">
             <video
               ref="lessonVideoRef"
               class="lesson-video-player"
@@ -78,20 +79,68 @@
               playsinline
               preload="metadata"
               :src="activeLesson.videoUrl"
+              @loadstart="onVideoLoadStart"
+              @play="onVideoPlay"
               @loadedmetadata="onVideoLoadedMetadata"
+              @error="onVideoError"
               @timeupdate="onVideoTimeUpdate"
               @pause="onVideoPause"
               @ended="onVideoEnded"
             ></video>
+            <div v-if="videoLoadErrorTitle" class="video-error-panel">
+              <p class="video-error-title">{{ videoLoadErrorTitle }}</p>
+              <p v-if="videoLoadErrorDetail" class="video-error-detail">{{ videoLoadErrorDetail }}</p>
+              <button class="ghost-btn video-error-action" type="button" @click="openVideoSourceInNewTab">Open video URL</button>
+            </div>
             <div class="video-player-meta">
-              <span>Resume {{ formatSeconds(activeLesson.playback?.positionSec || 0) }}</span>
-              <strong>{{ activeLesson.playback?.progressPercent || 0 }}% watched</strong>
+              <span>Resume {{ formatSeconds(displayVideoResumeSec) }}</span>
+              <strong>{{ displayVideoProgressPercent }}% watched</strong>
             </div>
             <label class="video-auto-complete-toggle">
               <input v-model="autoCompleteVideoEnabled" type="checkbox" />
               <span>Auto complete saat capai target</span>
             </label>
           </div>
+          <article v-else-if="activeLesson?.type === 'article'" class="lesson-type-panel">
+            <h4>Article Lesson</h4>
+            <p class="muted">Baca materi artikel dan lanjutkan ke lesson berikutnya saat selesai.</p>
+            <p v-if="activeLesson.articleContent" class="lesson-article-content">{{ activeLesson.articleContent }}</p>
+            <div class="table-actions">
+              <a v-if="activeLesson.articleReferenceUrl" class="ghost-btn" :href="activeLesson.articleReferenceUrl" target="_blank" rel="noopener noreferrer">Open Reference</a>
+              <button
+                v-if="activeLesson.articleAttachmentId || activeLesson.articleAttachmentDataUrl || activeLesson.articleAttachmentUrl"
+                class="ghost-btn"
+                type="button"
+                @click="downloadActiveLessonArticleAttachment"
+              >
+                Download Attachment
+              </button>
+            </div>
+          </article>
+          <article v-else-if="activeLesson?.type === 'quiz'" class="lesson-type-panel">
+            <h4>Quiz Lesson</h4>
+            <p class="muted">Lesson ini terhubung ke quiz engine yang sudah ada.</p>
+            <p class="muted"><strong>Quiz ID:</strong> {{ activeLesson.quizId || '-' }}</p>
+            <div class="table-actions">
+              <RouterLink v-if="activeLesson.quizId" class="primary-btn" :to="toLessonQuizRoute(activeLesson.quizId)">Mulai Quiz</RouterLink>
+              <RouterLink class="ghost-btn" :to="{ name: 'quiz-admin' }">Manage Quiz</RouterLink>
+            </div>
+          </article>
+          <article v-else-if="activeLesson?.type === 'assignment'" class="lesson-type-panel">
+            <h4>Assignment Lesson</h4>
+            <p class="muted">{{ activeLesson.assignmentInstruction || 'Baca instruksi tugas lalu submit di tab Assignment.' }}</p>
+            <p class="muted"><strong>Mode:</strong> {{ activeLesson.assignmentMode || 'file' }} · <strong>Due:</strong> {{ activeLesson.assignmentDueAt || '-' }}</p>
+            <div class="table-actions">
+              <button class="ghost-btn" type="button" @click="activeTab = 'assignment'">Open Assignment Tab</button>
+            </div>
+          </article>
+          <article v-else-if="activeLesson?.type === 'live'" class="lesson-type-panel">
+            <h4>Live Session</h4>
+            <p class="muted"><strong>Start:</strong> {{ activeLesson.liveStartAt || '-' }} · <strong>Timezone:</strong> {{ activeLesson.liveTimezone || 'Asia/Jakarta' }}</p>
+            <div class="table-actions">
+              <a v-if="activeLesson.liveMeetingUrl" class="primary-btn" :href="activeLesson.liveMeetingUrl" target="_blank" rel="noopener noreferrer">Join Meeting</a>
+            </div>
+          </article>
           <div class="hero-actions">
             <button class="ghost-btn" type="button" :disabled="!previousLesson" @click="goPrevious">Previous</button>
             <button class="primary-btn" type="button" :disabled="isCompleting || !activeLesson || !canCompleteActiveLesson" @click="markComplete">
@@ -102,7 +151,7 @@
           <p v-if="activeLesson && !canCompleteActiveLesson" class="muted">
             {{ activeLessonCompletionHint }}
           </p>
-          <div class="lesson-enhancement-grid">
+          <div v-if="activeLesson?.type === 'video'" class="lesson-enhancement-grid">
             <section class="lesson-side-card">
               <div class="section-header">
                 <h4>Bookmark & Notes</h4>
@@ -112,7 +161,14 @@
               <div class="lesson-note-form">
                 <label class="assignment-field">
                   <span>Timestamp</span>
-                  <input v-model.number="noteDraftTimestampSec" class="assignment-input" type="number" min="0" step="1" aria-label="Note timestamp" />
+                  <input
+                    v-model="noteDraftTimestampInput"
+                    class="assignment-input"
+                    type="text"
+                    inputmode="numeric"
+                    placeholder="00:00"
+                    aria-label="Note timestamp"
+                  />
                 </label>
                 <label class="assignment-field">
                   <span>Catatan</span>
@@ -765,7 +821,7 @@
 
       <template v-if="activeTab === 'material'">
         <div id="lesson-panel-material" role="tabpanel" aria-labelledby="lesson-tab-material">
-        <div v-if="activeLesson?.videoUrl" class="video-player-shell">
+        <div v-if="activeLesson?.type === 'video' && activeLesson?.videoUrl" class="video-player-shell">
           <video
             ref="lessonVideoRef"
             class="lesson-video-player"
@@ -773,20 +829,68 @@
             playsinline
             preload="metadata"
             :src="activeLesson.videoUrl"
+            @loadstart="onVideoLoadStart"
+            @play="onVideoPlay"
             @loadedmetadata="onVideoLoadedMetadata"
+            @error="onVideoError"
             @timeupdate="onVideoTimeUpdate"
             @pause="onVideoPause"
             @ended="onVideoEnded"
           ></video>
+          <div v-if="videoLoadErrorTitle" class="video-error-panel">
+            <p class="video-error-title">{{ videoLoadErrorTitle }}</p>
+            <p v-if="videoLoadErrorDetail" class="video-error-detail">{{ videoLoadErrorDetail }}</p>
+            <button class="ghost-btn video-error-action" type="button" @click="openVideoSourceInNewTab">Open video URL</button>
+          </div>
           <div class="video-player-meta">
-            <span>Resume {{ formatSeconds(activeLesson.playback?.positionSec || 0) }}</span>
-            <strong>{{ activeLesson.playback?.progressPercent || 0 }}% watched</strong>
+            <span>Resume {{ formatSeconds(displayVideoResumeSec) }}</span>
+            <strong>{{ displayVideoProgressPercent }}% watched</strong>
           </div>
           <label class="video-auto-complete-toggle">
             <input v-model="autoCompleteVideoEnabled" type="checkbox" />
             <span>Auto complete saat capai target</span>
           </label>
         </div>
+        <article v-else-if="activeLesson?.type === 'article'" class="lesson-type-panel">
+          <h4>Article Lesson</h4>
+          <p class="muted">Baca materi artikel dan lanjutkan ke lesson berikutnya saat selesai.</p>
+          <p v-if="activeLesson.articleContent" class="lesson-article-content">{{ activeLesson.articleContent }}</p>
+          <div class="table-actions">
+            <a v-if="activeLesson.articleReferenceUrl" class="ghost-btn" :href="activeLesson.articleReferenceUrl" target="_blank" rel="noopener noreferrer">Open Reference</a>
+            <button
+              v-if="activeLesson.articleAttachmentId || activeLesson.articleAttachmentDataUrl || activeLesson.articleAttachmentUrl"
+              class="ghost-btn"
+              type="button"
+              @click="downloadActiveLessonArticleAttachment"
+            >
+              Download Attachment
+            </button>
+          </div>
+        </article>
+        <article v-else-if="activeLesson?.type === 'quiz'" class="lesson-type-panel">
+          <h4>Quiz Lesson</h4>
+          <p class="muted">Lesson ini terhubung ke quiz engine yang sudah ada.</p>
+          <p class="muted"><strong>Quiz ID:</strong> {{ activeLesson.quizId || '-' }}</p>
+          <div class="table-actions">
+            <RouterLink v-if="activeLesson.quizId" class="primary-btn" :to="toLessonQuizRoute(activeLesson.quizId)">Mulai Quiz</RouterLink>
+            <RouterLink class="ghost-btn" :to="{ name: 'quiz-admin' }">Manage Quiz</RouterLink>
+          </div>
+        </article>
+        <article v-else-if="activeLesson?.type === 'assignment'" class="lesson-type-panel">
+          <h4>Assignment Lesson</h4>
+          <p class="muted">{{ activeLesson.assignmentInstruction || 'Baca instruksi tugas lalu submit di tab Assignment.' }}</p>
+          <p class="muted"><strong>Mode:</strong> {{ activeLesson.assignmentMode || 'file' }} · <strong>Due:</strong> {{ activeLesson.assignmentDueAt || '-' }}</p>
+          <div class="table-actions">
+            <button class="ghost-btn" type="button" @click="activeTab = 'assignment'">Open Assignment Tab</button>
+          </div>
+        </article>
+        <article v-else-if="activeLesson?.type === 'live'" class="lesson-type-panel">
+          <h4>Live Session</h4>
+          <p class="muted"><strong>Start:</strong> {{ activeLesson.liveStartAt || '-' }} · <strong>Timezone:</strong> {{ activeLesson.liveTimezone || 'Asia/Jakarta' }}</p>
+          <div class="table-actions">
+            <a v-if="activeLesson.liveMeetingUrl" class="primary-btn" :href="activeLesson.liveMeetingUrl" target="_blank" rel="noopener noreferrer">Join Meeting</a>
+          </div>
+        </article>
         <div class="hero-actions">
           <button class="ghost-btn" type="button" :disabled="!previousLesson" @click="goPrevious">Prev</button>
           <button class="primary-btn" type="button" :disabled="isCompleting || !activeLesson || !canCompleteActiveLesson" @click="markComplete">
@@ -797,7 +901,7 @@
         <p v-if="activeLesson && !canCompleteActiveLesson" class="muted">
           {{ activeLessonCompletionHint }}
         </p>
-        <div class="lesson-enhancement-grid">
+        <div v-if="activeLesson?.type === 'video'" class="lesson-enhancement-grid">
           <section class="lesson-side-card">
             <div class="section-header">
               <h4>Bookmark & Notes</h4>
@@ -807,7 +911,14 @@
             <div class="lesson-note-form">
               <label class="assignment-field">
                 <span>Timestamp</span>
-                <input v-model.number="noteDraftTimestampSec" class="assignment-input" type="number" min="0" step="1" aria-label="Note timestamp" />
+                <input
+                  v-model="noteDraftTimestampInput"
+                  class="assignment-input"
+                  type="text"
+                  inputmode="numeric"
+                  placeholder="00:00"
+                  aria-label="Note timestamp"
+                />
               </label>
               <label class="assignment-field">
                 <span>Catatan</span>
@@ -1454,6 +1565,7 @@
       </div>
     </article>
   </div>
+  </div>
 </template>
 
 <script setup>
@@ -1461,6 +1573,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRoute, useRouter } from 'vue-router'
 import { useTemplateSwitcher } from '../plugins/templateSwitcher'
+import { apiClient } from '../services/api/client'
 import { quizCatalogService } from '../services/quizCatalogService'
 import { useAuthStore } from '../stores/auth'
 import { useLessonAssignmentStore } from '../stores/lessonAssignment'
@@ -1517,6 +1630,10 @@ const downloadingAttachmentId = ref('')
 const lessonVideoRef = ref(null)
 const isVideoSeekingFromResume = ref(false)
 const autoCompleteVideoEnabled = ref(true)
+const liveVideoPositionSec = ref(0)
+const liveVideoDurationSec = ref(0)
+const videoLoadErrorTitle = ref('')
+const videoLoadErrorDetail = ref('')
 const autoCompletingLessonId = ref('')
 const reviewDraftById = ref({})
 const assignmentReviewFilter = ref('all')
@@ -1548,14 +1665,33 @@ const activeLessonResources = computed(() => (Array.isArray(activeLesson.value?.
 const canCompleteActiveLesson = computed(() => {
   const lesson = activeLesson.value
   if (!lesson) return false
+  if (lesson.type === 'video' && lesson.canComplete === false) {
+    const required = Number(lesson.completionRequiredPercent || 90)
+    return displayVideoProgressPercent.value >= required
+  }
   return lesson.canComplete !== false
 })
 const activeLessonCompletionHint = computed(() => {
   const lesson = activeLesson.value
   if (!lesson || lesson.canComplete !== false) return ''
   const required = Number(lesson.completionRequiredPercent || 90)
-  const current = Number(lesson.playback?.progressPercent || 0)
+  const current = lesson.type === 'video' ? displayVideoProgressPercent.value : Number(lesson.playback?.progressPercent || 0)
   return lesson.completionGateReason || `Tonton minimal ${required}% (saat ini ${current}%).`
+})
+const displayVideoResumeSec = computed(() => {
+  const lesson = activeLesson.value
+  if (!lesson || lesson.type !== 'video') return Math.max(0, Math.floor(Number(lesson?.playback?.positionSec || 0)))
+  const fallback = Math.max(0, Math.floor(Number(lesson.playback?.positionSec || 0)))
+  return Math.max(fallback, liveVideoPositionSec.value)
+})
+const displayVideoProgressPercent = computed(() => {
+  const lesson = activeLesson.value
+  if (!lesson || lesson.type !== 'video') return Math.max(0, Math.min(100, Math.round(Number(lesson?.playback?.progressPercent || 0))))
+  const fallback = Math.max(0, Math.min(100, Math.round(Number(lesson.playback?.progressPercent || 0))))
+  const duration = Math.max(0, Math.floor(Number(liveVideoDurationSec.value || lesson.playback?.durationSec || 0)))
+  if (duration <= 0) return fallback
+  const live = Math.max(0, Math.min(100, Math.round((Math.max(0, liveVideoPositionSec.value) / duration) * 100)))
+  return Math.max(fallback, live)
 })
 const previousLesson = computed(() => currentCourse.value?.previousLesson || null)
 const nextLesson = computed(() => currentCourse.value?.nextLesson || null)
@@ -1588,6 +1724,12 @@ const canSaveNoteDraft = computed(
     Number(noteDraftTimestampSec.value) >= 0 &&
     String(noteDraftText.value || '').trim().length > 0,
 )
+const noteDraftTimestampInput = computed({
+  get: () => formatSeconds(noteDraftTimestampSec.value),
+  set: (value) => {
+    noteDraftTimestampSec.value = parseTimestampInput(value)
+  },
+})
 const filteredTranscriptRows = computed(() => {
   const rows = Array.isArray(activeLesson.value?.transcript) ? activeLesson.value.transcript : []
   const query = String(transcriptQuery.value || '').trim().toLowerCase()
@@ -1855,6 +1997,26 @@ const formatSeconds = (value) => {
   return `${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}`
 }
 
+const parseTimestampInput = (value) => {
+  const text = String(value || '').trim()
+  if (!text) return 0
+  if (/^\d+$/.test(text)) return Math.max(0, Math.floor(Number(text)))
+  const parts = text.split(':').map((part) => part.trim())
+  if (!parts.length || parts.some((part) => !/^\d+$/.test(part))) return 0
+  if (parts.length === 2) {
+    const minute = Number(parts[0] || 0)
+    const second = Number(parts[1] || 0)
+    return Math.max(0, minute * 60 + second)
+  }
+  if (parts.length === 3) {
+    const hour = Number(parts[0] || 0)
+    const minute = Number(parts[1] || 0)
+    const second = Number(parts[2] || 0)
+    return Math.max(0, hour * 3600 + minute * 60 + second)
+  }
+  return 0
+}
+
 const formatBytes = (value) => {
   const bytes = Math.max(0, Number(value || 0))
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
@@ -1865,6 +2027,29 @@ const formatBytes = (value) => {
 const downloadLessonResource = (resource) => {
   if (!resource?.dataUrl) return
   downloadDataUrl(resource.dataUrl, resource.fileName || resource.title || 'resource.txt')
+}
+
+const downloadActiveLessonArticleAttachment = async () => {
+  const lesson = activeLesson.value
+  if (!lesson) return
+  if (lesson.articleAttachmentDataUrl) {
+    downloadDataUrl(lesson.articleAttachmentDataUrl, lesson.articleAttachmentName || 'article-attachment')
+    return
+  }
+  const uploadId = String(lesson.articleAttachmentId || '').trim()
+  if (!uploadId || !apiClient.courses?.getAttachmentData) return
+  try {
+    const payload = await apiClient.courses.getAttachmentData(uploadId)
+    const dataUrl = String(payload?.dataUrl || '')
+    if (!dataUrl) throw new Error('Attachment data kosong.')
+    downloadDataUrl(dataUrl, lesson.articleAttachmentName || payload?.fileName || 'article-attachment')
+  } catch (error) {
+    toastStore.push({
+      type: 'error',
+      title: 'Gagal download article',
+      message: error instanceof Error ? error.message : 'Terjadi kesalahan.',
+    })
+  }
 }
 
 const seekToTimestamp = (sec) => {
@@ -1880,6 +2065,20 @@ const seekToTimestamp = (sec) => {
 
 const setNoteTimestampFromCurrent = () => {
   noteDraftTimestampSec.value = Math.max(0, Math.floor(Number(lessonVideoRef.value?.currentTime || 0)))
+}
+
+const syncVideoLiveMetrics = () => {
+  if (!lessonVideoRef.value) return
+  const position = Math.max(0, Math.floor(Number(lessonVideoRef.value.currentTime || 0)))
+  const durationRaw = Number(lessonVideoRef.value.duration || 0)
+  const duration = Number.isFinite(durationRaw) ? Math.max(0, Math.floor(durationRaw)) : 0
+  liveVideoPositionSec.value = position
+  liveVideoDurationSec.value = duration
+}
+
+const syncNoteTimestampFromVideo = () => {
+  if (!lessonVideoRef.value) return
+  noteDraftTimestampSec.value = Math.max(0, Math.floor(Number(lessonVideoRef.value.currentTime || 0)))
 }
 
 const readAutoCompleteVideoPreference = () => {
@@ -1928,6 +2127,10 @@ const schedulePlaybackFlush = (force = false) => {
 }
 
 const onVideoLoadedMetadata = () => {
+  videoLoadErrorTitle.value = ''
+  videoLoadErrorDetail.value = ''
+  syncVideoLiveMetrics()
+  syncNoteTimestampFromVideo()
   if (!lessonVideoRef.value || !activeLesson.value) return
   const resumeAtSec = Math.floor(Number(activeLesson.value.playback?.positionSec || 0))
   if (!resumeAtSec || resumeAtSec < 2) return
@@ -1944,17 +2147,100 @@ const onVideoLoadedMetadata = () => {
   }
 }
 
+const onVideoLoadStart = () => {
+  videoLoadErrorTitle.value = ''
+  videoLoadErrorDetail.value = ''
+  syncVideoLiveMetrics()
+  syncNoteTimestampFromVideo()
+}
+
+const onVideoPlay = () => {
+  syncVideoLiveMetrics()
+  syncNoteTimestampFromVideo()
+}
+
+const inferVideoIssue = (src, mediaErrorCode) => {
+  const source = String(src || '').trim()
+  if (!source) {
+    return {
+      title: 'Video URL kosong',
+      detail: 'Isi URL video langsung (direct file) pada lesson type Video.',
+    }
+  }
+  const lower = source.toLowerCase()
+  if (typeof window !== 'undefined' && window.location.protocol === 'https:' && lower.startsWith('http://')) {
+    return {
+      title: 'Mixed Content diblokir browser',
+      detail: 'Aplikasi berjalan di HTTPS, tapi URL video masih HTTP. Gunakan URL HTTPS.',
+    }
+  }
+  const likelyOwnCloudSharePage =
+    (lower.includes('/index.php/s/') || lower.includes('/s/')) &&
+    !lower.includes('/download') &&
+    !lower.includes('/files=')
+  if (likelyOwnCloudSharePage) {
+    return {
+      title: 'Link ownCloud belum direct video',
+      detail: 'Gunakan link download langsung, contoh: .../index.php/s/<token>/download?path=%2F&files=video.mp4',
+    }
+  }
+  const looksLikeVideoFile = /\.(mp4|webm|ogg|m3u8)(\?|#|$)/i.test(source) || lower.includes('/download')
+  if (!looksLikeVideoFile) {
+    return {
+      title: 'URL bukan file video langsung',
+      detail: 'URL sebaiknya menunjuk langsung ke file video (mp4/webm/ogg) atau endpoint download.',
+    }
+  }
+  if (mediaErrorCode === 2) {
+    return {
+      title: 'Network error saat memuat video',
+      detail: 'Cek koneksi atau izin akses link video (public permission).',
+    }
+  }
+  if (mediaErrorCode === 4) {
+    return {
+      title: 'Format/akses video tidak didukung',
+      detail: 'Pastikan server kirim Content-Type video/*, mendukung byte-range, CORS diizinkan, dan codec H.264/AAC.',
+    }
+  }
+  return {
+    title: 'Video gagal dimuat',
+    detail: 'Periksa URL direct video, permission public link, dan konfigurasi CORS server.',
+  }
+}
+
+const onVideoError = (event) => {
+  const target = event?.target
+  const mediaErrorCode = Number(target?.error?.code || 0)
+  const source = String(target?.currentSrc || activeLesson.value?.videoUrl || '')
+  const issue = inferVideoIssue(source, mediaErrorCode)
+  videoLoadErrorTitle.value = issue.title
+  videoLoadErrorDetail.value = issue.detail
+}
+
+const openVideoSourceInNewTab = () => {
+  const source = String(lessonVideoRef.value?.currentSrc || activeLesson.value?.videoUrl || '').trim()
+  if (!source) return
+  window.open(source, '_blank', 'noopener,noreferrer')
+}
+
 const onVideoTimeUpdate = () => {
   if (isVideoSeekingFromResume.value) return
+  syncVideoLiveMetrics()
+  syncNoteTimestampFromVideo()
   schedulePlaybackFlush(false)
   tryAutoCompleteByVideoProgress()
 }
 
 const onVideoPause = () => {
+  syncVideoLiveMetrics()
+  syncNoteTimestampFromVideo()
   schedulePlaybackFlush(true)
 }
 
 const onVideoEnded = async () => {
+  syncVideoLiveMetrics()
+  syncNoteTimestampFromVideo()
   await flushPlayback(true, true)
   tryAutoCompleteByVideoProgress()
 }
@@ -2089,6 +2375,16 @@ const toModuleQuizRoute = (quiz, source) => ({
     course: String(route.params.id),
     module: quiz.moduleId,
     source,
+  },
+})
+
+const toLessonQuizRoute = (quizId) => ({
+  name: 'quiz',
+  params: { id: String(quizId || '') },
+  query: {
+    course: String(route.params.id),
+    lesson: String(activeLesson.value?.id || ''),
+    source: 'lesson-quiz',
   },
 })
 
@@ -2808,10 +3104,26 @@ const loadCourse = async () => {
     await syncLessonQuery(coursePlayerStore.currentCourse?.activeLesson?.id || '')
     await focusDiscussionFromQuery()
   } catch (error) {
+    const message = error instanceof Error ? error.message : 'Terjadi kesalahan saat memuat course.'
+    if (message.includes('Course tidak ditemukan.')) {
+      coursePlayerStore.currentCourse = null
+      await coursePlayerStore.loadCourses()
+      const fallbackCourse = coursePlayerStore.courses[0]
+      if (fallbackCourse?.id) {
+        router.replace({
+          name: 'course-detail',
+          params: { id: fallbackCourse.id },
+          query: fallbackCourse.activeLessonId ? { lesson: fallbackCourse.activeLessonId } : {},
+        })
+      } else {
+        router.replace({ name: 'dashboard' })
+      }
+      return
+    }
     toastStore.push({
       type: 'error',
       title: 'Course gagal dimuat',
-      message: error instanceof Error ? error.message : 'Terjadi kesalahan saat memuat course.',
+      message,
     })
   }
 }
@@ -2874,6 +3186,9 @@ const markComplete = async () => {
   const beforeCourse = currentCourse.value ? JSON.parse(JSON.stringify(currentCourse.value)) : null
   isCompleting.value = true
   try {
+    if (activeLesson.value.type === 'video') {
+      await flushPlayback(true, true)
+    }
     await coursePlayerStore.completeLesson(route.params.id, activeLesson.value.id)
     await syncLessonQuery(coursePlayerStore.currentCourse?.activeLesson?.id || '')
 
@@ -2991,6 +3306,10 @@ watch(
 watch(
   () => activeLesson.value?.id,
   () => {
+    liveVideoPositionSec.value = Math.max(0, Math.floor(Number(activeLesson.value?.playback?.positionSec || 0)))
+    liveVideoDurationSec.value = Math.max(0, Math.floor(Number(activeLesson.value?.playback?.durationSec || 0)))
+    videoLoadErrorTitle.value = ''
+    videoLoadErrorDetail.value = ''
     lastPlaybackSavedAt = 0
     if (playbackSaveTimer) {
       clearTimeout(playbackSaveTimer)

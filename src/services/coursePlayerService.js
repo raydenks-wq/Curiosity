@@ -3,6 +3,7 @@ import { quizEngineService } from './quizEngineService'
 
 const COURSE_PROGRESS_KEY = 'curiosity:lms:course-progress:v1'
 const COURSE_MODULE_PREREQ_KEY = 'curiosity:lms:course-module-prereq:v1'
+const COURSE_MANAGED_KEY = 'curiosity:lms:course-management:v1'
 const VIDEO_COMPLETION_THRESHOLD_PERCENT = 90
 const MAX_WATCH_STEP_SEC = 20
 const ANALYTICS_WINDOW_DAYS = 7
@@ -21,6 +22,18 @@ const toBase64 = (content) => {
 }
 
 const toDataUrl = (mimeType, content) => `data:${mimeType};base64,${toBase64(content)}`
+const toSafeText = (value, fallback = '') => {
+  const text = String(value || '').trim()
+  return text || fallback
+}
+const toDurationLabel = (minutes) => `${Math.max(1, Math.floor(Number(minutes || 10)))}m`
+const toCourseGradient = (category) => {
+  const name = String(category || '').trim().toLowerCase()
+  if (name.includes('design')) return 'linear-gradient(120deg, #0081a7, #00afb9)'
+  if (name.includes('code') || name.includes('frontend')) return 'linear-gradient(120deg, #fb8500, #ffb703)'
+  if (name.includes('product')) return 'linear-gradient(120deg, #8338ec, #3a86ff)'
+  return 'linear-gradient(120deg, #2c7da0, #3d5a80)'
+}
 
 const textResource = ({ id, title, fileName, content }) => ({
   id,
@@ -30,6 +43,144 @@ const textResource = ({ id, title, fileName, content }) => ({
   sizeBytes: new TextEncoder().encode(content).length,
   dataUrl: toDataUrl('text/plain', content),
 })
+
+const readManagedPublishedCourses = () => {
+  if (typeof localStorage === 'undefined') return { hasManagedStore: false, courses: [] }
+  const raw = localStorage.getItem(COURSE_MANAGED_KEY)
+  if (!raw) return { hasManagedStore: false, courses: [] }
+  try {
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return { hasManagedStore: true, courses: [] }
+    return {
+      hasManagedStore: true,
+      courses: parsed
+        .filter((course) => String(course?.status || '').toLowerCase() === 'published')
+        .map((course) => toPlayerCourseFromManaged(course)),
+    }
+  } catch {
+    return { hasManagedStore: true, courses: [] }
+  }
+}
+
+const toPlayerLessonFromManaged = (lesson, moduleId, lessonIndex) => {
+  const type = ['video', 'article', 'quiz', 'assignment', 'live'].includes(String(lesson?.type || '')) ? String(lesson.type) : 'video'
+  const durationMin = Math.max(1, Number(lesson?.durationMin || 10))
+  return {
+    id: toSafeText(lesson?.id, `${moduleId}-l${lessonIndex + 1}`),
+    title: toSafeText(lesson?.title, `Lesson ${lessonIndex + 1}`),
+    duration: toDurationLabel(durationMin),
+    durationMin,
+    type,
+    videoUrl: String(lesson?.videoUrl || ''),
+    summary: toSafeText(lesson?.summary || lesson?.articleContent || '', 'Materi lesson belum ditambahkan.'),
+    contentUrl: String(lesson?.contentUrl || ''),
+    transcriptUrl: String(lesson?.transcriptUrl || ''),
+    articleContent: String(lesson?.articleContent || ''),
+    articleReferenceUrl: String(lesson?.articleReferenceUrl || ''),
+    articleAttachmentName: String(lesson?.articleAttachmentName || ''),
+    articleAttachmentId: String(lesson?.articleAttachmentId || ''),
+    articleAttachmentUrl: String(lesson?.articleAttachmentUrl || ''),
+    quizId: String(lesson?.quizId || ''),
+    quizPassingScore: Math.min(100, Math.max(0, Number(lesson?.quizPassingScore ?? 70))),
+    quizTimerMin: Math.max(0, Number(lesson?.quizTimerMin ?? 0)),
+    assignmentInstruction: String(lesson?.assignmentInstruction || ''),
+    assignmentMode: String(lesson?.assignmentMode || 'file'),
+    assignmentDueAt: String(lesson?.assignmentDueAt || ''),
+    assignmentResourceUrl: String(lesson?.assignmentResourceUrl || ''),
+    liveMeetingUrl: String(lesson?.liveMeetingUrl || ''),
+    liveStartAt: String(lesson?.liveStartAt || ''),
+    liveTimezone: String(lesson?.liveTimezone || 'Asia/Jakarta'),
+    resources: Array.isArray(lesson?.resources) ? lesson.resources : [],
+  }
+}
+
+const toPlayerCourseFromManaged = (course) => {
+  const modules = (Array.isArray(course?.modules) ? course.modules : [])
+    .map((module, moduleIndex) => {
+      const moduleId = toSafeText(module?.id, `${toSafeText(course?.id, 'course')}-m${moduleIndex + 1}`)
+      const lessons = Array.isArray(module?.lessons) ? module.lessons : []
+      const normalizedLessons = lessons.length
+        ? lessons.map((lesson, lessonIndex) => toPlayerLessonFromManaged(lesson, moduleId, lessonIndex))
+        : [toPlayerLessonFromManaged({}, moduleId, 0)]
+      return {
+        id: moduleId,
+        title: toSafeText(module?.title, `Module ${moduleIndex + 1}`),
+        prerequisite: module?.prerequisite && typeof module.prerequisite === 'object' ? module.prerequisite : undefined,
+        lessons: normalizedLessons,
+      }
+    })
+  const fallbackModules = modules.length ? modules : [{ id: `${toSafeText(course?.id, 'course')}-m1`, title: 'Module 1', lessons: [toPlayerLessonFromManaged({}, `${toSafeText(course?.id, 'course')}-m1`, 0)] }]
+  return {
+    id: toSafeText(course?.id, `course-${Math.random().toString(36).slice(2, 8)}`),
+    title: toSafeText(course?.title, 'Untitled Course'),
+    description: toSafeText(course?.description, 'Deskripsi course belum tersedia.'),
+    tag: toSafeText(course?.category, 'General'),
+    gradient: toCourseGradient(course?.category),
+    instructor: toSafeText(course?.instructor || course?.settings?.ownerUserIds?.[0], 'Course Team'),
+    modules: fallbackModules,
+  }
+}
+
+const getRuntimeCatalog = () => {
+  const managed = readManagedPublishedCourses()
+  const catalog = managed.hasManagedStore ? managed.courses : [...defaultCatalog]
+  cleanupObsoleteRuntimeState(catalog)
+  return catalog
+}
+
+const cleanupObsoleteRuntimeState = (catalog = []) => {
+  if (typeof localStorage === 'undefined') return
+  const courses = Array.isArray(catalog) ? catalog : []
+  const validCourseIds = new Set(courses.map((course) => String(course?.id || '')).filter(Boolean))
+  const validModuleByCourse = Object.fromEntries(
+    courses.map((course) => [
+      String(course?.id || ''),
+      new Set((Array.isArray(course?.modules) ? course.modules : []).map((module) => String(module?.id || '')).filter(Boolean)),
+    ]),
+  )
+
+  const progress = safeJsonRead(COURSE_PROGRESS_KEY, {})
+  let progressChanged = false
+  const nextProgress = {}
+  Object.entries(progress || {}).forEach(([scopeKey, scopeValue]) => {
+    const scope = scopeValue && typeof scopeValue === 'object' ? scopeValue : {}
+    const nextScope = {}
+    Object.entries(scope).forEach(([courseId, courseState]) => {
+      if (!validCourseIds.has(String(courseId || ''))) {
+        progressChanged = true
+        return
+      }
+      nextScope[courseId] = courseState
+    })
+    nextProgress[scopeKey] = nextScope
+  })
+  if (progressChanged) {
+    safeJsonWrite(COURSE_PROGRESS_KEY, nextProgress)
+  }
+
+  const overrides = readModulePrerequisiteOverrides()
+  let overrideChanged = false
+  const nextOverrides = {}
+  Object.entries(overrides || {}).forEach(([compoundKey, payload]) => {
+    const [courseId, moduleId] = String(compoundKey || '').split(':')
+    if (!courseId || !moduleId) {
+      overrideChanged = true
+      return
+    }
+    if (!validCourseIds.has(courseId)) {
+      overrideChanged = true
+      return
+    }
+    if (!validModuleByCourse[courseId]?.has(moduleId)) {
+      overrideChanged = true
+      return
+    }
+    nextOverrides[compoundKey] = payload
+  })
+  if (overrideChanged) {
+    writeModulePrerequisiteOverrides(nextOverrides)
+  }
+}
 
 const defaultCatalog = [
   {
@@ -269,7 +420,11 @@ const safeJsonRead = (key, fallback) => {
 
 const safeJsonWrite = (key, value) => {
   if (typeof localStorage === 'undefined') return
-  localStorage.setItem(key, JSON.stringify(value))
+  try {
+    localStorage.setItem(key, JSON.stringify(value))
+  } catch {
+    // swallow localStorage quota / serialization errors to keep UI navigation resilient
+  }
 }
 
 const flattenLessons = (course) =>
@@ -530,6 +685,21 @@ const buildCourseView = (course, state) => {
     ...module,
     lessons: module.lessons.map((lesson) => {
       const meta = lessonMetaById[lesson.id]
+      const articleAttachmentResource =
+        lesson.type === 'article' && (lesson.articleAttachmentId || lesson.articleAttachmentUrl || lesson.articleAttachmentDataUrl)
+          ? [
+              {
+                id: `${lesson.id}-article-attachment`,
+                title: lesson.articleAttachmentName || 'Article attachment',
+                fileName: lesson.articleAttachmentName || 'article-attachment',
+                mimeType: String(lesson.articleAttachmentDataUrl || '').match(/^data:([^;]+);/i)?.[1] || 'application/octet-stream',
+                sizeBytes: 0,
+                dataUrl: lesson.articleAttachmentDataUrl || '',
+                uploadId: lesson.articleAttachmentId || '',
+                url: lesson.articleAttachmentUrl || '',
+              },
+            ]
+          : []
       const playback = {
         positionSec: Math.max(0, Math.floor(Number(state.lessonPlayback?.[lesson.id]?.positionSec || 0))),
         durationSec: Math.max(0, Math.floor(Number(state.lessonPlayback?.[lesson.id]?.durationSec || 0))),
@@ -553,7 +723,7 @@ const buildCourseView = (course, state) => {
       return {
         ...lesson,
         videoUrl: lesson.videoUrl || (lesson.type === 'video' ? demoVideoUrl : ''),
-        resources: toLessonResourceList(lesson.resources),
+        resources: toLessonResourceList([...(Array.isArray(lesson.resources) ? lesson.resources : []), ...articleAttachmentResource]),
         transcript: (
           Array.isArray(lesson.transcript) && lesson.transcript.length
             ? lesson.transcript
@@ -629,7 +799,7 @@ const toCourseCard = (courseView) => ({
   lastTouchedAt: courseView.lastTouchedAt || null,
 })
 
-const getCourseById = (courseId) => defaultCatalog.find((course) => course.id === courseId)
+const getCourseById = (courseId) => getRuntimeCatalog().find((course) => course.id === courseId)
 
 const userScopeKey = (userId) => String(userId || 'guest')
 
@@ -646,7 +816,7 @@ const buildLearningAnalytics = (userId) => {
   })
   const bucketByDate = Object.fromEntries(dayBuckets.map((row) => [row.date, row]))
 
-  const courses = defaultCatalog.map((course) => {
+  const courses = getRuntimeCatalog().map((course) => {
     const state = getProgressState(key, course)
     state.userScopeId = userId || 'guest'
     const view = buildCourseView(course, state)
@@ -720,7 +890,7 @@ const getContinueLearning = (userId) => {
 export const coursePlayerService = {
   listCourses(userId) {
     const key = userScopeKey(userId)
-    return defaultCatalog.map((course) => {
+    return getRuntimeCatalog().map((course) => {
       const state = getProgressState(key, course)
       state.userScopeId = userId || 'guest'
       return toCourseCard(buildCourseView(course, state))
