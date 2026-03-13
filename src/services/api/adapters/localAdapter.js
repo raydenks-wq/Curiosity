@@ -95,7 +95,7 @@ const normalizeCertificateTemplate = (item) => {
     title: String(item?.title || '').trim(),
     subtitle: String(item?.subtitle || '').trim(),
     bodyText: String(item?.bodyText || '').trim(),
-    status: ['draft', 'published', 'archived'].includes(String(item?.status || 'draft')) ? String(item.status) : 'draft',
+    status: ['draft', 'in_review', 'published', 'archived'].includes(String(item?.status || 'draft')) ? String(item.status) : 'draft',
     courseId: String(item?.courseId || '').trim(),
     passingScore: Math.max(0, Math.min(100, Number(item?.passingScore || 70))),
     validityDays: Math.max(1, Math.min(3650, Number(item?.validityDays || 365))),
@@ -121,6 +121,7 @@ const normalizeCertificateIssuance = (item) => {
     templateTitle: String(item?.templateTitle || ''),
     courseId: String(item?.courseId || ''),
     courseTitle: String(item?.courseTitle || ''),
+    recipientUserId: String(item?.recipientUserId || ''),
     recipientName: String(item?.recipientName || '').trim(),
     recipientEmail: String(item?.recipientEmail || '').trim().toLowerCase(),
     certificateNo: String(item?.certificateNo || '').trim().toUpperCase(),
@@ -1878,6 +1879,24 @@ export const localAdapter = {
       }),
   },
   certificates: {
+    listRecipients: (user) =>
+      Promise.resolve().then(() => {
+        const actor = user || getCurrentLocalUser() || {}
+        if (!canManageCertificate(actor)) {
+          const error = new Error('Forbidden')
+          error.code = 'FORBIDDEN'
+          throw error
+        }
+        return userAccountService
+          .loadUsers()
+          .filter((item) => item.status === 'active')
+          .map((item) => ({
+            id: item.id,
+            name: item.name,
+            email: item.email,
+            role: item.role,
+          }))
+      }),
     listTemplates: (user) =>
       Promise.resolve().then(() => {
         const actor = user || getCurrentLocalUser() || {}
@@ -1932,6 +1951,11 @@ export const localAdapter = {
         })
         if (!normalized.title) throw new Error('Title wajib diisi.')
         if (!normalized.courseId) throw new Error('Course wajib dipilih.')
+        if (existing?.status === 'published' && normalized.status !== 'archived') {
+          const error = new Error('Template published terkunci. Duplicate template baru atau ubah status ke archived.')
+          error.code = 'CONFLICT'
+          throw error
+        }
         const idTaken = store.templates.some((item) => item.id === id && item.id !== existing?.id)
         if (idTaken) {
           const error = new Error('Template ID sudah digunakan.')
@@ -2014,6 +2038,44 @@ export const localAdapter = {
           .sort((a, b) => String(b.issuedAt || '').localeCompare(String(a.issuedAt || '')))
           .slice(0, max)
       }),
+    exportIssuanceCsv: (user) =>
+      Promise.resolve().then(() => {
+        const actor = user || getCurrentLocalUser() || {}
+        if (!canManageCertificate(actor)) {
+          const error = new Error('Forbidden')
+          error.code = 'FORBIDDEN'
+          throw error
+        }
+        const header = ['certificateNo', 'verificationCode', 'templateId', 'templateTitle', 'courseId', 'courseTitle', 'recipientUserId', 'recipientName', 'recipientEmail', 'status', 'issuedAt', 'expiresAt', 'score']
+        const escape = (value) => `"${String(value ?? '').replace(/\"/g, '""')}"`
+        const lines = [header.join(',')]
+        readCertificateStore()
+          .issuances
+          .slice()
+          .sort((a, b) => String(b.issuedAt || '').localeCompare(String(a.issuedAt || '')))
+          .forEach((item) => {
+            lines.push(
+              [
+                item.certificateNo,
+                item.verificationCode,
+                item.templateId,
+                item.templateTitle,
+                item.courseId,
+                item.courseTitle,
+                item.recipientUserId,
+                item.recipientName,
+                item.recipientEmail,
+                item.status,
+                item.issuedAt,
+                item.expiresAt || '',
+                item.score ?? '',
+              ]
+                .map(escape)
+                .join(','),
+            )
+          })
+        return lines.join('\n')
+      }),
     issue: (payload, user) =>
       Promise.resolve().then(() => {
         const actor = user || getCurrentLocalUser() || {}
@@ -2035,8 +2097,11 @@ export const localAdapter = {
           error.code = 'CONFLICT'
           throw error
         }
-        const recipientName = String(payload?.recipientName || '').trim()
-        if (!recipientName) throw new Error('Nama penerima wajib diisi.')
+        const recipientUserId = String(payload?.recipientUserId || '').trim()
+        if (!recipientUserId) throw new Error('Penerima wajib dipilih dari user aktif.')
+        const recipient = userAccountService.loadUsers().find((item) => item.id === recipientUserId)
+        if (!recipient) throw new Error('Recipient user tidak ditemukan.')
+        if (recipient.status !== 'active') throw new Error('Recipient user tidak aktif.')
         const courseId = String(payload?.courseId || template.courseId || '').trim()
         const certificateNumberSeq = Number(store.counters.certificate || 1)
         const certificateNo = `${String(template.certificatePrefix || 'CRT').toUpperCase()}-${String(certificateNumberSeq).padStart(6, '0')}`
@@ -2051,8 +2116,9 @@ export const localAdapter = {
           templateTitle: template.title,
           courseId,
           courseTitle: resolveCourseTitleLocal(courseId),
-          recipientName,
-          recipientEmail: String(payload?.recipientEmail || '').trim().toLowerCase(),
+          recipientUserId,
+          recipientName: recipient.name,
+          recipientEmail: String(recipient.email || '').trim().toLowerCase(),
           certificateNo,
           verificationCode: createVerificationCode(certificateNo),
           issuedAt,
@@ -2068,6 +2134,71 @@ export const localAdapter = {
         store.issuances = [issued, ...store.issuances]
         writeCertificateStore(store)
         return issued
+      }),
+    issueBulk: (payload, user) =>
+      Promise.resolve().then(() => {
+        const actor = user || getCurrentLocalUser() || {}
+        if (!canManageCertificate(actor)) {
+          const error = new Error('Forbidden')
+          error.code = 'FORBIDDEN'
+          throw error
+        }
+        const store = readCertificateStore()
+        const templateId = String(payload?.templateId || '').trim()
+        const template = store.templates.find((item) => item.id === templateId)
+        if (!template) {
+          const error = new Error('Template tidak ditemukan.')
+          error.code = 'NOT_FOUND'
+          throw error
+        }
+        if (template.status !== 'published') {
+          const error = new Error('Template harus published sebelum issue.')
+          error.code = 'CONFLICT'
+          throw error
+        }
+        const allUsers = userAccountService.loadUsers()
+        const recipientIds = [...new Set((payload?.recipientUserIds || []).map((id) => String(id || '').trim()).filter(Boolean))]
+        if (!recipientIds.length) throw new Error('Pilih minimal satu recipient.')
+        const recipients = recipientIds.map((id) => allUsers.find((item) => item.id === id)).filter(Boolean)
+        if (recipients.length !== recipientIds.length) throw new Error('Ada recipient yang tidak ditemukan.')
+        if (recipients.some((item) => item.status !== 'active')) throw new Error('Ada recipient yang tidak aktif.')
+        const courseId = String(payload?.courseId || template.courseId || '').trim()
+        const items = recipients.map((recipient) => {
+          const certificateNumberSeq = Number(store.counters.certificate || 1)
+          const certificateNo = `${String(template.certificatePrefix || 'CRT').toUpperCase()}-${String(certificateNumberSeq).padStart(6, '0')}`
+          store.counters.certificate = certificateNumberSeq + 1
+          const issueId = createCertificateIssuanceId(store.counters.issuance)
+          store.counters.issuance = Number(store.counters.issuance || 1) + 1
+          const issuedAt = new Date().toISOString()
+          const expiryMs = Date.now() + Math.max(1, Number(template.validityDays || 365)) * 24 * 60 * 60 * 1000
+          return normalizeCertificateIssuance({
+            id: issueId,
+            templateId: template.id,
+            templateTitle: template.title,
+            courseId,
+            courseTitle: resolveCourseTitleLocal(courseId),
+            recipientUserId: recipient.id,
+            recipientName: recipient.name,
+            recipientEmail: String(recipient.email || '').trim().toLowerCase(),
+            certificateNo,
+            verificationCode: createVerificationCode(certificateNo),
+            issuedAt,
+            expiresAt: new Date(expiryMs).toISOString(),
+            status: 'issued',
+            score: Number.isFinite(Number(payload?.score)) ? Number(payload.score) : null,
+            issuedBy: {
+              id: actor?.id || '',
+              name: actor?.name || actor?.email || 'Instructor',
+              email: actor?.email || '',
+            },
+          })
+        })
+        store.issuances = [...items, ...store.issuances]
+        writeCertificateStore(store)
+        return {
+          total: items.length,
+          items,
+        }
       }),
     revoke: (issuanceId, payload, user) =>
       Promise.resolve().then(() => {
@@ -2085,11 +2216,13 @@ export const localAdapter = {
           error.code = 'NOT_FOUND'
           throw error
         }
+        const reason = String(payload?.reason || '').trim()
+        if (reason.length < 3) throw new Error('Revoke reason minimal 3 karakter.')
         const revoked = {
           ...target,
           status: 'revoked',
           revokedAt: new Date().toISOString(),
-          revokedReason: String(payload?.reason || '').trim(),
+          revokedReason: reason,
         }
         store.issuances = store.issuances.map((item) => (item.id === id ? revoked : item))
         writeCertificateStore(store)

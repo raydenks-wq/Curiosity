@@ -153,10 +153,15 @@
         <h3>Certificates & Achievements</h3>
       </div>
       <div class="cert-grid">
-        <article v-for="item in certificates" :key="item.title" class="cert-card">
+        <article v-for="item in certificates" :key="item.certificateNo || `${item.title}-${item.issuedAt}`" class="cert-card">
           <h4>{{ item.title }}</h4>
           <p class="muted">Issued: {{ item.issuedAt }}</p>
-          <button class="ghost-btn" type="button">Download</button>
+          <p v-if="item.certificateNo" class="muted">No: {{ item.certificateNo }}</p>
+          <p v-if="item.status" class="muted">Status: {{ item.status }}</p>
+          <button v-if="item.verificationCode" class="ghost-btn" type="button" @click="openCertificateVerification(item.verificationCode)">
+            Verify
+          </button>
+          <button v-else class="ghost-btn" type="button">Download</button>
         </article>
       </div>
       <div class="badge-row">
@@ -238,13 +243,14 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useTemplateSwitcher } from '../plugins/templateSwitcher'
 import { apiClient } from '../services/api/client'
 import { useProfileStore } from '../stores/profile'
 import { useToastStore } from '../stores/toast'
 
 const route = useRoute()
+const router = useRouter()
 const { templateOptions, currentTemplate, setTemplate } = useTemplateSwitcher()
 
 const profileStore = useProfileStore()
@@ -638,6 +644,15 @@ const resetCropPosition = () => {
   cropState.zoom = 1.25
   cropState.offsetX = 0
   cropState.offsetY = 0
+}
+
+const openCertificateVerification = (verificationCode) => {
+  const code = String(verificationCode || '').trim()
+  if (!code) return
+  const target = router.resolve({ name: 'certificate-verify', params: { code } })
+  if (typeof window !== 'undefined') {
+    window.open(target.href, '_blank', 'noopener')
+  }
 }
 
 watch(

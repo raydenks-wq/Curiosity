@@ -35,8 +35,8 @@ export const useProfileStore = defineStore('profile', {
       this.progressMetrics = data.progressMetrics
     },
 
-    async load() {
-      if (this.loaded) return
+    async load(force = false) {
+      if (this.loaded && !force) return
 
       this.isLoading = true
       try {
@@ -46,6 +46,10 @@ export const useProfileStore = defineStore('profile', {
       } finally {
         this.isLoading = false
       }
+    },
+
+    async refresh() {
+      await this.load(true)
     },
 
     async saveAccount(payload) {

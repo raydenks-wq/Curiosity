@@ -65,6 +65,23 @@ const buildManagedCoursePayload = (overrides = {}) => ({
   ...overrides,
 })
 
+const buildCertificateTemplatePayload = (overrides = {}) => ({
+  id: 'certtpl-ui-101',
+  title: 'Certificate of Completion UI',
+  subtitle: 'Diberikan kepada peserta yang lulus standar evaluasi',
+  bodyText: 'Peserta telah menyelesaikan seluruh modul sesuai ketentuan.',
+  status: 'published',
+  courseId: 'ui-101',
+  passingScore: 70,
+  validityDays: 365,
+  certificatePrefix: 'CRT-UI',
+  signerName: 'Ayu Pratama',
+  signerTitle: 'Program Director',
+  autoIssue: true,
+  theme: 'aurora',
+  ...overrides,
+})
+
 describe('Curiosity API integration', () => {
   beforeEach(async () => {
     await ensureDb()
@@ -240,6 +257,109 @@ describe('Curiosity API integration', () => {
       .set('Authorization', `Bearer ${login.body.token}`)
     expect(verify.status).toBe(200)
     expect(typeof verify.body.ok).toBe('boolean')
+  })
+
+  it('supports certificate template, issue, revoke, and public verify flow', async () => {
+    const login = await loginAs('indra@curiosity.app', 'admin123')
+    expect(login.status).toBe(200)
+    const auth = { Authorization: `Bearer ${login.body.token}` }
+
+    const saveTemplate = await request(app)
+      .post('/api/certificates/templates')
+      .set(auth)
+      .send(buildCertificateTemplatePayload())
+    expect(saveTemplate.status).toBe(200)
+    expect(saveTemplate.body.id).toBe('certtpl-ui-101')
+
+    const updatePublishedBlocked = await request(app)
+      .post('/api/certificates/templates')
+      .set(auth)
+      .send({
+        ...saveTemplate.body,
+        title: 'Updated Should Fail',
+        status: 'published',
+      })
+    expect(updatePublishedBlocked.status).toBe(409)
+
+    const recipients = await request(app)
+      .get('/api/certificates/recipients')
+      .set(auth)
+    expect(recipients.status).toBe(200)
+    expect(Array.isArray(recipients.body)).toBe(true)
+    expect(recipients.body.some((item) => item.id === 'u-003')).toBe(true)
+
+    const issue = await request(app)
+      .post('/api/certificates/issuances')
+      .set(auth)
+      .send({
+        templateId: 'certtpl-ui-101',
+        recipientUserId: 'u-003',
+        score: 88,
+      })
+    expect(issue.status).toBe(201)
+    expect(issue.body.certificateNo).toMatch(/^CRT-UI-/)
+    expect(typeof issue.body.verificationCode).toBe('string')
+
+    const bulkIssue = await request(app)
+      .post('/api/certificates/issuances/bulk')
+      .set(auth)
+      .send({
+        templateId: 'certtpl-ui-101',
+        recipientUserIds: ['u-002', 'u-003'],
+        score: 85,
+      })
+    expect(bulkIssue.status).toBe(201)
+    expect(Number(bulkIssue.body.total || 0)).toBe(2)
+    expect(Array.isArray(bulkIssue.body.items)).toBe(true)
+
+    const studentLogin = await loginAs('raka@curiosity.app', 'student123')
+    expect(studentLogin.status).toBe(200)
+    const studentProfile = await request(app)
+      .get('/api/profile')
+      .set('Authorization', `Bearer ${studentLogin.body.token}`)
+    expect(studentProfile.status).toBe(200)
+    expect(Array.isArray(studentProfile.body.certificates)).toBe(true)
+    expect(studentProfile.body.certificates.some((item) => item.certificateNo === issue.body.certificateNo)).toBe(true)
+    expect(Number(studentProfile.body.stats?.coursesCompleted || 0)).toBeGreaterThanOrEqual(8)
+    expect(Array.isArray(studentProfile.body.badges)).toBe(true)
+    expect(studentProfile.body.badges).toContain('Certificate Earner')
+
+    const verifyPublic = await request(app).get(`/api/certificates/verify/${encodeURIComponent(issue.body.verificationCode)}`)
+    expect(verifyPublic.status).toBe(200)
+    expect(verifyPublic.body.status).toBe('valid')
+    expect(verifyPublic.body.issuance.recipientName).toBe('Raka Wijaya')
+
+    const revoke = await request(app)
+      .post(`/api/certificates/issuances/${encodeURIComponent(issue.body.id)}/revoke`)
+      .set(auth)
+      .send({ reason: 'Revoked for test' })
+    expect(revoke.status).toBe(200)
+    expect(revoke.body.status).toBe('revoked')
+
+    const revokeWithoutReason = await request(app)
+      .post(`/api/certificates/issuances/${encodeURIComponent(issue.body.id)}/revoke`)
+      .set(auth)
+      .send({})
+    expect(revokeWithoutReason.status).toBe(400)
+
+    const verifyAfterRevoke = await request(app).get(`/api/certificates/verify/${encodeURIComponent(issue.body.verificationCode)}`)
+    expect(verifyAfterRevoke.status).toBe(200)
+    expect(verifyAfterRevoke.body.status).toBe('revoked')
+
+    const studentProfileAfterRevoke = await request(app)
+      .get('/api/profile')
+      .set('Authorization', `Bearer ${studentLogin.body.token}`)
+    expect(studentProfileAfterRevoke.status).toBe(200)
+    const syncedItem = studentProfileAfterRevoke.body.certificates.find((item) => item.certificateNo === issue.body.certificateNo)
+    expect(syncedItem?.status).toBe('revoked')
+    expect(Number(studentProfileAfterRevoke.body.stats?.coursesCompleted || 0)).toBeGreaterThanOrEqual(7)
+
+    const exportCsv = await request(app)
+      .get('/api/certificates/issuances/export.csv')
+      .set(auth)
+    expect(exportCsv.status).toBe(200)
+    expect(String(exportCsv.headers['content-type'] || '')).toContain('text/csv')
+    expect(String(exportCsv.text || '')).toContain('certificateNo')
   })
 
   it('supports course management server-side queue lifecycle', async () => {

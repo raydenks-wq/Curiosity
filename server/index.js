@@ -583,7 +583,19 @@ const profileStateSchema = z
       coursesCompleted: z.number().min(0).max(9999),
       learningHours: z.number().min(0).max(999999),
     }),
-    certificates: z.array(z.object({ title: z.string().max(120), issuedAt: z.string().max(40) })),
+    certificates: z.array(
+      z.object({
+        title: z.string().max(120),
+        issuedAt: z.string().max(40),
+        courseId: z.string().max(90).optional(),
+        courseTitle: z.string().max(220).optional(),
+        recipientUserId: z.string().max(90).optional(),
+        certificateNo: z.string().max(40).optional(),
+        verificationCode: z.string().max(120).optional(),
+        templateId: z.string().max(90).optional(),
+        status: z.enum(['issued', 'revoked', 'expired']).optional(),
+      }),
+    ),
     badges: z.array(z.string().max(60)),
     progressMetrics: z.array(z.object({ label: z.string().max(80), value: z.number().min(0).max(100) })),
   })
@@ -871,6 +883,9 @@ const courseManagementLessonTypeValues = ['video', 'article', 'quiz', 'assignmen
 const courseManagementCompletionModes = ['lesson', 'module', 'hybrid']
 const courseManagementLevels = ['beginner', 'intermediate', 'advanced']
 const courseManagementVisibilityValues = ['public', 'private', 'invite-only']
+const certificateTemplateStatusValues = ['draft', 'in_review', 'published', 'archived']
+const certificateTemplateThemeValues = ['aurora', 'sunrise', 'minimal']
+const certificateIssuanceStatusValues = ['issued', 'revoked', 'expired']
 
 const courseManagementAssetSchema = z
   .object({
@@ -999,6 +1014,50 @@ const courseManagementJobCreateSchema = z
   })
   .strict()
 
+const certificateTemplateSaveSchema = z
+  .object({
+    id: z.string().min(1).max(90).optional().or(z.literal('')),
+    title: z.string().min(1).max(220),
+    subtitle: z.string().max(400).optional().or(z.literal('')),
+    bodyText: z.string().max(5000).optional().or(z.literal('')),
+    status: z.enum(certificateTemplateStatusValues).optional(),
+    courseId: z.string().min(1).max(90),
+    passingScore: z.number().min(0).max(100).optional(),
+    validityDays: z.number().int().min(1).max(3650).optional(),
+    certificatePrefix: z.string().min(1).max(16).optional(),
+    signerName: z.string().max(120).optional().or(z.literal('')),
+    signerTitle: z.string().max(120).optional().or(z.literal('')),
+    autoIssue: z.boolean().optional(),
+    theme: z.enum(certificateTemplateThemeValues).optional(),
+    createdAt: z.string().max(80).optional(),
+    updatedAt: z.string().max(80).optional(),
+  })
+  .strict()
+
+const certificateIssueSchema = z
+  .object({
+    templateId: z.string().min(1).max(90),
+    courseId: z.string().min(1).max(90).optional().or(z.literal('')),
+    recipientUserId: z.string().min(1).max(90),
+    score: z.number().min(0).max(100).nullable().optional(),
+  })
+  .strict()
+
+const certificateRevokeSchema = z
+  .object({
+    reason: z.string().trim().min(3).max(300),
+  })
+  .strict()
+
+const certificateBulkIssueSchema = z
+  .object({
+    templateId: z.string().min(1).max(90),
+    courseId: z.string().min(1).max(90).optional().or(z.literal('')),
+    recipientUserIds: z.array(z.string().min(1).max(90)).min(1).max(300),
+    score: z.number().min(0).max(100).nullable().optional(),
+  })
+  .strict()
+
 const createDefaultProfileState = (user) => ({
   profile: {
     name: user.name,
@@ -1098,6 +1157,13 @@ const toSlug = (value) =>
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '')
+const toCertificateCode = (value) =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
 const hasDuplicate = (values = []) => {
   const set = new Set()
   for (const item of values) {
@@ -1169,6 +1235,183 @@ const normalizeCourseManagementPermissionMatrix = (matrix) => {
 const getCourseManagementPermissionsForUser = (db, user) => {
   const matrix = normalizeCourseManagementPermissionMatrix(db?.courseManagementPermissions)
   return matrix[user?.role] || matrix.student
+}
+const canManageCertificateRole = (db, user) => user?.role === 'admin' || user?.role === 'instructor' || canReviewAssignmentRole(db, user)
+
+const normalizeCertificatePrefix = (value) => {
+  const prefix = String(value || 'CRT')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9-]/g, '')
+    .slice(0, 12)
+  return prefix || 'CRT'
+}
+
+const normalizeCertificateTemplatePayload = (payload, existing = null) => {
+  const nowIso = new Date().toISOString()
+  return {
+    id: String(payload?.id || existing?.id || '').trim(),
+    title: String(payload?.title || existing?.title || '').trim(),
+    subtitle: String(payload?.subtitle || existing?.subtitle || '').trim(),
+    bodyText: String(payload?.bodyText || existing?.bodyText || '').trim(),
+    status: certificateTemplateStatusValues.includes(String(payload?.status || existing?.status || 'draft'))
+      ? String(payload?.status || existing?.status || 'draft')
+      : 'draft',
+    courseId: String(payload?.courseId || existing?.courseId || '').trim(),
+    passingScore: Math.max(0, Math.min(100, Number(payload?.passingScore ?? existing?.passingScore ?? 70))),
+    validityDays: Math.max(1, Math.min(3650, Number(payload?.validityDays ?? existing?.validityDays ?? 365))),
+    certificatePrefix: normalizeCertificatePrefix(payload?.certificatePrefix || existing?.certificatePrefix || 'CRT'),
+    signerName: String(payload?.signerName || existing?.signerName || '').trim(),
+    signerTitle: String(payload?.signerTitle || existing?.signerTitle || '').trim(),
+    autoIssue: Boolean(payload?.autoIssue ?? existing?.autoIssue ?? true),
+    theme: certificateTemplateThemeValues.includes(String(payload?.theme || existing?.theme || 'aurora'))
+      ? String(payload?.theme || existing?.theme || 'aurora')
+      : 'aurora',
+    createdAt: existing?.createdAt || payload?.createdAt || nowIso,
+    updatedAt: payload?.updatedAt || nowIso,
+  }
+}
+
+const createIssuedCertificateRecord = (db, { template, courseId, recipient, score, issuedBy }) => {
+  const issueSeq = Math.max(1, Number(db?.certificateCounters?.issuance || 1))
+  const certSeq = Math.max(1, Number(db?.certificateCounters?.certificate || 1))
+  const certificateNo = `${normalizeCertificatePrefix(template.certificatePrefix)}-${String(certSeq).padStart(6, '0')}`
+  const verificationCode = toCertificateCode(`${certificateNo}-${Math.random().toString(36).slice(2, 8)}`)
+  const issuedAt = new Date().toISOString()
+  const expiresAt = new Date(Date.now() + Math.max(1, Number(template.validityDays || 365)) * 24 * 60 * 60 * 1000).toISOString()
+  const issued = normalizeCertificateIssuancePayload({
+    id: `certiss-${String(issueSeq).padStart(5, '0')}`,
+    templateId: template.id,
+    templateTitle: template.title,
+    courseId,
+    courseTitle: getCourseTitleForCertificate(db, courseId),
+    recipientUserId: recipient.id,
+    recipientName: recipient.name,
+    recipientEmail: recipient.email,
+    certificateNo,
+    verificationCode,
+    issuedAt,
+    expiresAt,
+    status: 'issued',
+    score: Number.isFinite(Number(score)) ? Number(score) : null,
+    issuedBy: {
+      id: issuedBy?.id || '',
+      name: issuedBy?.name || issuedBy?.email || 'Instructor',
+      email: issuedBy?.email || '',
+    },
+  })
+  db.certificateCounters.issuance = issueSeq + 1
+  db.certificateCounters.certificate = certSeq + 1
+  return issued
+}
+
+const normalizeCertificateIssuancePayload = (payload) => ({
+  id: String(payload?.id || '').trim(),
+  templateId: String(payload?.templateId || '').trim(),
+  templateTitle: String(payload?.templateTitle || '').trim(),
+  courseId: String(payload?.courseId || '').trim(),
+  courseTitle: String(payload?.courseTitle || '').trim(),
+  recipientUserId: String(payload?.recipientUserId || '').trim(),
+  recipientName: String(payload?.recipientName || '').trim(),
+  recipientEmail: normalizeEmail(payload?.recipientEmail || ''),
+  certificateNo: String(payload?.certificateNo || '').trim().toUpperCase(),
+  verificationCode: toCertificateCode(payload?.verificationCode || ''),
+  issuedAt: String(payload?.issuedAt || '').trim(),
+  expiresAt: payload?.expiresAt ? String(payload.expiresAt) : null,
+  status: certificateIssuanceStatusValues.includes(String(payload?.status || 'issued')) ? String(payload.status || 'issued') : 'issued',
+  score: Number.isFinite(Number(payload?.score)) ? Math.max(0, Math.min(100, Number(payload.score))) : null,
+  issuedBy: payload?.issuedBy && typeof payload.issuedBy === 'object'
+    ? {
+        id: String(payload.issuedBy.id || ''),
+        name: String(payload.issuedBy.name || ''),
+        email: String(payload.issuedBy.email || ''),
+      }
+    : null,
+  revokedAt: payload?.revokedAt ? String(payload.revokedAt) : null,
+  revokedReason: String(payload?.revokedReason || '').trim(),
+})
+
+const getCourseTitleForCertificate = (db, courseId) => {
+  const id = String(courseId || '').trim()
+  if (!id) return '-'
+  const managed = (Array.isArray(db?.courseManagement) ? db.courseManagement : []).find((item) => item.id === id)
+  if (managed?.title) return String(managed.title)
+  const runtime = (Array.isArray(db?.courses) ? db.courses : []).find((item) => item.id === id)
+  return runtime?.title || id
+}
+
+const resolveCertificateStatus = (issuance) => {
+  if (issuance?.status === 'revoked') return 'revoked'
+  const expiresAtMs = issuance?.expiresAt ? Date.parse(issuance.expiresAt) : Number.NaN
+  if (Number.isFinite(expiresAtMs) && Date.now() > expiresAtMs) return 'expired'
+  return 'issued'
+}
+
+const findCertificateRecipientUser = (db, { recipientUserId, recipientEmail, recipientName }) => {
+  const users = Array.isArray(db?.users) ? db.users : []
+  const userId = String(recipientUserId || '').trim()
+  if (userId) {
+    const byId = users.find((user) => user.id === userId)
+    if (byId) return byId
+  }
+  const email = normalizeEmail(recipientEmail || '')
+  if (email) {
+    const byEmail = users.find((user) => normalizeEmail(user.email) === email)
+    if (byEmail) return byEmail
+  }
+  const name = String(recipientName || '')
+    .trim()
+    .toLowerCase()
+  if (!name) return null
+  const matches = users.filter((user) => String(user.name || '').trim().toLowerCase() === name)
+  if (matches.length === 1) return matches[0]
+  return null
+}
+
+const syncIssuedCertificateToProfile = (db, issued) => {
+  const recipient = findCertificateRecipientUser(db, {
+    recipientUserId: issued?.recipientUserId,
+    recipientEmail: issued?.recipientEmail,
+    recipientName: issued?.recipientName,
+  })
+  if (!recipient?.id) return null
+  const currentState = db.profiles?.[recipient.id] || createDefaultProfileState(recipient)
+  const nextCertificatesRaw = Array.isArray(currentState.certificates) ? currentState.certificates.slice() : []
+  const item = {
+    title: String(issued?.courseTitle || issued?.templateTitle || 'Certificate'),
+    issuedAt: nowStamp(),
+    courseId: String(issued?.courseId || ''),
+    courseTitle: String(issued?.courseTitle || ''),
+    recipientUserId: String(recipient?.id || issued?.recipientUserId || ''),
+    certificateNo: String(issued?.certificateNo || ''),
+    verificationCode: String(issued?.verificationCode || ''),
+    templateId: String(issued?.templateId || ''),
+    status: resolveCertificateStatus(issued),
+  }
+  const deduped = nextCertificatesRaw.filter((row) => String(row?.certificateNo || '') !== item.certificateNo)
+  const nextState = {
+    ...currentState,
+    certificates: [item, ...deduped].slice(0, 60),
+  }
+  const previousExists = nextCertificatesRaw.some((row) => String(row?.certificateNo || '') === item.certificateNo)
+  if (!previousExists) {
+    const currentCompleted = Math.max(0, Number(nextState?.stats?.coursesCompleted || 0))
+    nextState.stats = {
+      ...(nextState.stats || {}),
+      coursesCompleted: currentCompleted + 1,
+    }
+  }
+  const issuedCount = (Array.isArray(nextState.certificates) ? nextState.certificates : []).filter(
+    (row) => String(row?.status || 'issued') !== 'revoked',
+  ).length
+  const badgeSet = new Set((Array.isArray(nextState.badges) ? nextState.badges : []).map((row) => String(row || '').trim()).filter(Boolean))
+  if (issuedCount > 0) badgeSet.add('Certificate Earner')
+  if (issuedCount >= 3) badgeSet.add('Certified Learner')
+  if (issuedCount <= 0) badgeSet.delete('Certificate Earner')
+  if (issuedCount < 3) badgeSet.delete('Certified Learner')
+  nextState.badges = [...badgeSet]
+  db.profiles[recipient.id] = nextState
+  return recipient
 }
 const buildCourseRevisionEntry = (course, action, actor) => ({
   id: `rev-${Math.random().toString(36).slice(2, 10)}`,
@@ -1582,6 +1825,14 @@ const createDefaultDb = () => {
     courseProgress: {},
     lessonNotes: {},
     discussions: {},
+    certificateSchemaVersion: 2,
+    certificateTemplates: [],
+    certificateIssuances: [],
+    certificateCounters: {
+      template: 1,
+      issuance: 1,
+      certificate: 1,
+    },
     courseManagementJobs: [],
     courseManagementJobDlq: [],
     jobWorkerLease: null,
@@ -1637,6 +1888,21 @@ const hydrateDb = (db) => {
   next.courseProgress = next.courseProgress || {}
   next.lessonNotes = next.lessonNotes || {}
   next.discussions = next.discussions || {}
+  next.certificateSchemaVersion = Number(next.certificateSchemaVersion || 2)
+  next.certificateTemplates = Array.isArray(next.certificateTemplates) ? next.certificateTemplates : []
+  next.certificateIssuances = Array.isArray(next.certificateIssuances) ? next.certificateIssuances : []
+  next.certificateCounters =
+    next.certificateCounters && typeof next.certificateCounters === 'object'
+      ? {
+          template: Math.max(1, Number(next.certificateCounters.template || 1)),
+          issuance: Math.max(1, Number(next.certificateCounters.issuance || 1)),
+          certificate: Math.max(1, Number(next.certificateCounters.certificate || 1)),
+        }
+      : {
+          template: Math.max(1, next.certificateTemplates.length + 1),
+          issuance: Math.max(1, next.certificateIssuances.length + 1),
+          certificate: Math.max(1, next.certificateIssuances.length + 1),
+        }
   next.courseManagementJobs = Array.isArray(next.courseManagementJobs) ? next.courseManagementJobs : []
   next.courseManagementJobDlq = Array.isArray(next.courseManagementJobDlq) ? next.courseManagementJobDlq : []
   next.jobWorkerLease = next.jobWorkerLease && typeof next.jobWorkerLease === 'object' ? next.jobWorkerLease : null
@@ -2750,6 +3016,14 @@ const loginLimiter = rateLimit({
   message: { message: 'Terlalu banyak percobaan login. Coba lagi nanti.' },
 })
 
+const certificateVerifyLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Terlalu banyak request verifikasi. Coba lagi nanti.' },
+})
+
 const requireAuth = async (req, res, next) => {
   try {
     const header = req.headers.authorization || ''
@@ -2794,6 +3068,13 @@ const requireQuizManager = (req, res, next) => {
 const requireCourseManager = (req, res, next) => {
   if (!canReviewAssignmentRole(req.db, req.user)) {
     return res.status(403).json({ message: 'Course manager access required.' })
+  }
+  return next()
+}
+
+const requireCertificateManager = (req, res, next) => {
+  if (!canManageCertificateRole(req.db, req.user)) {
+    return res.status(403).json({ message: 'Certificate manager access required.' })
   }
   return next()
 }
@@ -3265,6 +3546,326 @@ app.get('/api/uploads/:uploadId/url', requireAuth, async (req, res) => {
     url: signedUrl,
     requiresAuth: false,
     expiresInSec: Math.max(60, Math.min(S3_SIGNED_URL_EXPIRES_SEC, 60 * 60)),
+  })
+})
+
+app.get('/api/certificates/templates', requireAuth, requireCertificateManager, async (req, res) => {
+  const templates = (Array.isArray(req.db.certificateTemplates) ? req.db.certificateTemplates : [])
+    .map((item) => normalizeCertificateTemplatePayload(item))
+    .filter((item) => item.id && item.title && item.courseId)
+    .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+  return res.json(templates)
+})
+
+app.get('/api/certificates/recipients', requireAuth, requireCertificateManager, async (req, res) => {
+  const users = (Array.isArray(req.db.users) ? req.db.users : [])
+    .filter((user) => user.status === 'active')
+    .map((user) => ({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+    }))
+    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
+  return res.json(users)
+})
+
+app.get('/api/certificates/templates/:id', requireAuth, requireCertificateManager, async (req, res) => {
+  const template = (req.db.certificateTemplates || []).find((item) => item.id === req.params.id)
+  if (!template) return res.status(404).json({ message: 'Template not found.' })
+  return res.json(normalizeCertificateTemplatePayload(template))
+})
+
+app.post('/api/certificates/templates', requireAuth, requireCertificateManager, validateBody(certificateTemplateSaveSchema), async (req, res) => {
+  const templates = Array.isArray(req.db.certificateTemplates) ? req.db.certificateTemplates.slice() : []
+  const nowIso = new Date().toISOString()
+  const payloadId = String(req.body.id || '').trim()
+  const existing = payloadId ? templates.find((item) => item.id === payloadId) : null
+  const generatedId = `certtpl-${String(req.db?.certificateCounters?.template || 1).padStart(4, '0')}`
+  const id = existing?.id || payloadId || generatedId
+  const normalized = normalizeCertificateTemplatePayload(
+    {
+      ...req.body,
+      id,
+      updatedAt: nowIso,
+      createdAt: existing?.createdAt || req.body.createdAt || nowIso,
+    },
+    existing,
+  )
+  if (!normalized.title) return res.status(400).json({ message: 'Title wajib diisi.' })
+  if (!normalized.courseId) return res.status(400).json({ message: 'Course wajib dipilih.' })
+  if (existing?.status === 'published') {
+    const allowArchiveOnly = normalized.status === 'archived'
+    if (!allowArchiveOnly) {
+      return res.status(409).json({ message: 'Template published terkunci. Duplicate template baru atau ubah status ke archived.' })
+    }
+  }
+  const duplicateId = templates.some((item) => item.id === id && item.id !== existing?.id)
+  if (duplicateId) return res.status(409).json({ message: 'Template ID sudah digunakan.' })
+
+  if (!existing && !payloadId) {
+    req.db.certificateCounters.template = Math.max(1, Number(req.db?.certificateCounters?.template || 1)) + 1
+  }
+
+  req.db.certificateTemplates = existing
+    ? templates.map((item) => (item.id === id ? normalized : item))
+    : [normalized, ...templates]
+  addAuditLog(req.db, {
+    actor: req.user.email,
+    action: existing ? 'certificate_template_update' : 'certificate_template_create',
+    target: normalized.id,
+    detail: `${existing ? 'Updated' : 'Created'} certificate template ${normalized.title}.`,
+  })
+  await writeDb(req.db)
+  return res.json(normalized)
+})
+
+app.delete('/api/certificates/templates/:id', requireAuth, requireCertificateManager, async (req, res) => {
+  const templates = Array.isArray(req.db.certificateTemplates) ? req.db.certificateTemplates.slice() : []
+  const target = templates.find((item) => item.id === req.params.id)
+  if (!target) return res.status(404).json({ message: 'Template not found.' })
+  const hasIssued = (req.db.certificateIssuances || []).some((item) => item.templateId === target.id)
+  if (hasIssued) return res.status(409).json({ message: 'Template sudah dipakai issuance, tidak dapat dihapus.' })
+  req.db.certificateTemplates = templates.filter((item) => item.id !== req.params.id)
+  addAuditLog(req.db, {
+    actor: req.user.email,
+    action: 'certificate_template_delete',
+    target: target.id,
+    detail: `Deleted certificate template ${target.title}.`,
+  })
+  await writeDb(req.db)
+  return res.status(204).send()
+})
+
+app.post('/api/certificates/templates/:id/duplicate', requireAuth, requireCertificateManager, async (req, res) => {
+  const templates = Array.isArray(req.db.certificateTemplates) ? req.db.certificateTemplates.slice() : []
+  const source = templates.find((item) => item.id === req.params.id)
+  if (!source) return res.status(404).json({ message: 'Template not found.' })
+  const nowIso = new Date().toISOString()
+  const newId = `certtpl-${String(req.db?.certificateCounters?.template || 1).padStart(4, '0')}`
+  req.db.certificateCounters.template = Math.max(1, Number(req.db?.certificateCounters?.template || 1)) + 1
+  const duplicated = normalizeCertificateTemplatePayload({
+    ...source,
+    id: newId,
+    title: `${source.title} (Copy)`,
+    status: 'draft',
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  })
+  req.db.certificateTemplates = [duplicated, ...templates]
+  addAuditLog(req.db, {
+    actor: req.user.email,
+    action: 'certificate_template_duplicate',
+    target: duplicated.id,
+    detail: `Duplicated template ${source.id} to ${duplicated.id}.`,
+  })
+  await writeDb(req.db)
+  return res.json(duplicated)
+})
+
+app.get('/api/certificates/issuances', requireAuth, requireCertificateManager, async (req, res) => {
+  const limit = Math.max(1, Math.min(Number(req.query.limit || 200), 1000))
+  const items = (Array.isArray(req.db.certificateIssuances) ? req.db.certificateIssuances : [])
+    .map((item) => normalizeCertificateIssuancePayload(item))
+    .sort((a, b) => String(b.issuedAt || '').localeCompare(String(a.issuedAt || '')))
+    .slice(0, limit)
+    .map((item) => ({ ...item, status: resolveCertificateStatus(item) }))
+  return res.json(items)
+})
+
+app.post('/api/certificates/issuances', requireAuth, requireCertificateManager, validateBody(certificateIssueSchema), async (req, res) => {
+  const templates = Array.isArray(req.db.certificateTemplates) ? req.db.certificateTemplates : []
+  const template = templates.find((item) => item.id === req.body.templateId)
+  if (!template) return res.status(404).json({ message: 'Template tidak ditemukan.' })
+  if (template.status !== 'published') {
+    return res.status(409).json({ message: 'Template harus published sebelum issue.' })
+  }
+  const recipient = (Array.isArray(req.db.users) ? req.db.users : []).find((item) => item.id === req.body.recipientUserId)
+  if (!recipient) return res.status(404).json({ message: 'Recipient user tidak ditemukan.' })
+  if (recipient.status !== 'active') return res.status(409).json({ message: 'Recipient user tidak aktif.' })
+  const courseId = String(req.body.courseId || template.courseId || '').trim()
+  const issued = createIssuedCertificateRecord(req.db, {
+    template,
+    courseId,
+    recipient,
+    score: req.body.score,
+    issuedBy: req.user,
+  })
+  req.db.certificateIssuances = [issued, ...(Array.isArray(req.db.certificateIssuances) ? req.db.certificateIssuances : [])]
+  const syncedRecipient = syncIssuedCertificateToProfile(req.db, issued)
+  addAuditLog(req.db, {
+    actor: req.user.email,
+    action: 'certificate_issue',
+    target: issued.id,
+    detail: `Issued certificate ${issued.certificateNo} for ${issued.recipientName}${syncedRecipient ? ` and synced to ${syncedRecipient.email}` : ''}.`,
+  })
+  await writeDb(req.db)
+  return res.status(201).json(issued)
+})
+
+app.post('/api/certificates/issuances/bulk', requireAuth, requireCertificateManager, validateBody(certificateBulkIssueSchema), async (req, res) => {
+  const templates = Array.isArray(req.db.certificateTemplates) ? req.db.certificateTemplates : []
+  const template = templates.find((item) => item.id === req.body.templateId)
+  if (!template) return res.status(404).json({ message: 'Template tidak ditemukan.' })
+  if (template.status !== 'published') {
+    return res.status(409).json({ message: 'Template harus published sebelum issue.' })
+  }
+  const userMap = new Map((Array.isArray(req.db.users) ? req.db.users : []).map((item) => [item.id, item]))
+  const recipientIds = [...new Set((Array.isArray(req.body.recipientUserIds) ? req.body.recipientUserIds : []).map((id) => String(id || '').trim()).filter(Boolean))]
+  const invalidIds = recipientIds.filter((id) => !userMap.has(id))
+  if (invalidIds.length) {
+    return res.status(404).json({ message: `Recipient user tidak ditemukan: ${invalidIds.slice(0, 10).join(', ')}` })
+  }
+  const inactiveIds = recipientIds.filter((id) => userMap.get(id)?.status !== 'active')
+  if (inactiveIds.length) {
+    return res.status(409).json({ message: `Recipient user tidak aktif: ${inactiveIds.slice(0, 10).join(', ')}` })
+  }
+  const courseId = String(req.body.courseId || template.courseId || '').trim()
+  const issuedItems = recipientIds.map((id) =>
+    createIssuedCertificateRecord(req.db, {
+      template,
+      courseId,
+      recipient: userMap.get(id),
+      score: req.body.score,
+      issuedBy: req.user,
+    }),
+  )
+  req.db.certificateIssuances = [...issuedItems, ...(Array.isArray(req.db.certificateIssuances) ? req.db.certificateIssuances : [])]
+  issuedItems.forEach((item) => {
+    syncIssuedCertificateToProfile(req.db, item)
+  })
+  addAuditLog(req.db, {
+    actor: req.user.email,
+    action: 'certificate_issue_bulk',
+    target: template.id,
+    detail: `Bulk issued ${issuedItems.length} certificate(s) using template ${template.id}.`,
+  })
+  await writeDb(req.db)
+  return res.status(201).json({
+    total: issuedItems.length,
+    items: issuedItems,
+  })
+})
+
+app.post('/api/certificates/issuances/:id/revoke', requireAuth, requireCertificateManager, validateBody(certificateRevokeSchema), async (req, res) => {
+  const issuances = Array.isArray(req.db.certificateIssuances) ? req.db.certificateIssuances.slice() : []
+  const target = issuances.find((item) => item.id === req.params.id)
+  if (!target) return res.status(404).json({ message: 'Issuance not found.' })
+  const revoked = normalizeCertificateIssuancePayload({
+    ...target,
+    status: 'revoked',
+    revokedAt: new Date().toISOString(),
+    revokedReason: req.body.reason || target.revokedReason || '',
+  })
+  req.db.certificateIssuances = issuances.map((item) => (item.id === req.params.id ? revoked : item))
+  const recipient = findCertificateRecipientUser(req.db, {
+    recipientUserId: revoked.recipientUserId,
+    recipientEmail: revoked.recipientEmail,
+    recipientName: revoked.recipientName,
+  })
+  if (recipient?.id) {
+    const profileState = req.db.profiles?.[recipient.id] || createDefaultProfileState(recipient)
+    const previousCertificate = (Array.isArray(profileState.certificates) ? profileState.certificates : []).find(
+      (item) => String(item?.certificateNo || '') === revoked.certificateNo,
+    )
+    const nextCertificates = (Array.isArray(profileState.certificates) ? profileState.certificates : []).map((item) =>
+      String(item?.certificateNo || '') === revoked.certificateNo
+        ? {
+            ...item,
+            status: 'revoked',
+          }
+        : item,
+    )
+    const shouldDecreaseCompleted = previousCertificate && String(previousCertificate?.status || 'issued') !== 'revoked'
+    const currentCompleted = Math.max(0, Number(profileState?.stats?.coursesCompleted || 0))
+    const nextCompleted = shouldDecreaseCompleted ? Math.max(0, currentCompleted - 1) : currentCompleted
+    const activeCertificateCount = nextCertificates.filter((item) => String(item?.status || 'issued') !== 'revoked').length
+    const badgeSet = new Set((Array.isArray(profileState.badges) ? profileState.badges : []).map((row) => String(row || '').trim()).filter(Boolean))
+    if (activeCertificateCount > 0) badgeSet.add('Certificate Earner')
+    if (activeCertificateCount >= 3) badgeSet.add('Certified Learner')
+    if (activeCertificateCount <= 0) badgeSet.delete('Certificate Earner')
+    if (activeCertificateCount < 3) badgeSet.delete('Certified Learner')
+    req.db.profiles[recipient.id] = {
+      ...profileState,
+      stats: {
+        ...(profileState.stats || {}),
+        coursesCompleted: nextCompleted,
+      },
+      certificates: nextCertificates,
+      badges: [...badgeSet],
+    }
+  }
+  addAuditLog(req.db, {
+    actor: req.user.email,
+    action: 'certificate_revoke',
+    target: revoked.id,
+    detail: `Revoked certificate ${revoked.certificateNo}.`,
+  })
+  await writeDb(req.db)
+  return res.json(revoked)
+})
+
+app.get('/api/certificates/stats', requireAuth, requireCertificateManager, async (req, res) => {
+  const templates = Array.isArray(req.db.certificateTemplates) ? req.db.certificateTemplates.length : 0
+  const issuances = Array.isArray(req.db.certificateIssuances) ? req.db.certificateIssuances.length : 0
+  return res.json({
+    schemaVersion: Number(req.db.certificateSchemaVersion || 2),
+    templates,
+    issuances,
+  })
+})
+
+app.get('/api/certificates/issuances/export.csv', requireAuth, requireCertificateManager, async (req, res) => {
+  const rows = (Array.isArray(req.db.certificateIssuances) ? req.db.certificateIssuances : [])
+    .map((item) => normalizeCertificateIssuancePayload(item))
+    .sort((a, b) => String(b.issuedAt || '').localeCompare(String(a.issuedAt || '')))
+  const header = ['certificateNo', 'verificationCode', 'templateId', 'templateTitle', 'courseId', 'courseTitle', 'recipientUserId', 'recipientName', 'recipientEmail', 'status', 'issuedAt', 'expiresAt', 'score']
+  const escape = (value) => `"${String(value ?? '').replace(/\"/g, '""')}"`
+  const lines = [header.join(',')]
+  rows.forEach((item) => {
+    lines.push(
+      [
+        item.certificateNo,
+        item.verificationCode,
+        item.templateId,
+        item.templateTitle,
+        item.courseId,
+        item.courseTitle,
+        item.recipientUserId,
+        item.recipientName,
+        item.recipientEmail,
+        resolveCertificateStatus(item),
+        item.issuedAt,
+        item.expiresAt || '',
+        item.score ?? '',
+      ]
+        .map(escape)
+        .join(','),
+    )
+  })
+  const csv = lines.join('\n')
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+  res.setHeader('Content-Disposition', `attachment; filename=\"certificate-issuances-${new Date().toISOString().slice(0, 10)}.csv\"`)
+  return res.status(200).send(csv)
+})
+
+app.get('/api/certificates/verify/:code', certificateVerifyLimiter, async (req, res) => {
+  const code = toCertificateCode(req.params.code || '')
+  if (!code) return res.status(400).json({ message: 'Verification code is required.' })
+  const db = await readDb()
+  const items = Array.isArray(db.certificateIssuances) ? db.certificateIssuances : []
+  const issuance = items
+    .map((item) => normalizeCertificateIssuancePayload(item))
+    .find((item) => toCertificateCode(item.verificationCode) === code || toCertificateCode(item.certificateNo) === code)
+  if (!issuance) return res.status(404).json({ message: 'Certificate not found.' })
+  const template = (db.certificateTemplates || [])
+    .map((item) => normalizeCertificateTemplatePayload(item))
+    .find((item) => item.id === issuance.templateId) || null
+  const status = resolveCertificateStatus(issuance)
+  return res.json({
+    status: status === 'issued' ? 'valid' : status,
+    issuance: { ...issuance, status },
+    template,
   })
 })
 

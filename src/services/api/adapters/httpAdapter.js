@@ -542,6 +542,10 @@ export const httpAdapter = {
       }),
   },
   certificates: {
+    listRecipients: () =>
+      httpClient.request('/certificates/recipients', {
+        auth: true,
+      }),
     listTemplates: () =>
       httpClient.request('/certificates/templates', {
         auth: true,
@@ -576,11 +580,21 @@ export const httpAdapter = {
         auth: true,
         body: payload,
       }),
+    issueBulk: (payload) =>
+      httpClient.request('/certificates/issuances/bulk', {
+        method: 'POST',
+        auth: true,
+        body: payload,
+      }),
     revoke: (issuanceId, payload = {}) =>
       httpClient.request(`/certificates/issuances/${encodeURIComponent(issuanceId)}/revoke`, {
         method: 'POST',
         auth: true,
         body: payload,
+      }),
+    exportIssuanceCsv: () =>
+      httpClient.request('/certificates/issuances/export.csv', {
+        auth: true,
       }),
     verify: (lookupCode) =>
       httpClient.request(`/certificates/verify/${encodeURIComponent(String(lookupCode || '').trim())}`),

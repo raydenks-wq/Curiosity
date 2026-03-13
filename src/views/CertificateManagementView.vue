@@ -4,16 +4,38 @@
       <div class="section-header">
         <h2>Certificate Management</h2>
         <div class="table-actions">
+          <button class="ghost-btn" type="button" @click="exportIssuanceCsv">Export CSV</button>
+          <button class="ghost-btn" type="button" @click="openRecipientImport">Import Recipients</button>
           <button class="ghost-btn" type="button" @click="createTemplate">New Template</button>
+          <input ref="recipientImportInput" type="file" accept=".csv,text/csv" hidden @change="onImportRecipientFile" />
         </div>
       </div>
       <p class="muted">Kelola template sertifikat, aturan kelulusan, auto-issue, dan status publish.</p>
+      <div class="cert-kpi-grid">
+        <article class="cert-kpi-item">
+          <span>Total Issued</span>
+          <strong>{{ certKpis.totalIssued }}</strong>
+        </article>
+        <article class="cert-kpi-item">
+          <span>Revoked Rate</span>
+          <strong>{{ certKpis.revokedRate }}%</strong>
+        </article>
+        <article class="cert-kpi-item">
+          <span>Published Templates</span>
+          <strong>{{ certKpis.publishedTemplates }}</strong>
+        </article>
+        <article class="cert-kpi-item">
+          <span>Top Course</span>
+          <strong>{{ certKpis.topCourse }}</strong>
+        </article>
+      </div>
 
       <div class="quiz-admin-filter-row">
         <input v-model.trim="searchKeyword" class="quiz-input" type="search" placeholder="Search title/course/id..." />
         <select v-model="statusFilter" class="quiz-input">
           <option value="all">All Status</option>
           <option value="draft">Draft</option>
+          <option value="in_review">In Review</option>
           <option value="published">Published</option>
           <option value="archived">Archived</option>
         </select>
@@ -76,6 +98,7 @@
             <span class="quiz-input-label">Status</span>
             <select v-model="editor.status" class="quiz-input">
               <option value="draft">Draft</option>
+              <option value="in_review">In Review</option>
               <option value="published">Published</option>
               <option value="archived">Archived</option>
             </select>
@@ -159,12 +182,22 @@
         </div>
         <form class="form-grid compact quiz-admin-form" @submit.prevent="issueCertificate">
           <label class="quiz-input-group">
-            <span class="quiz-input-label">Recipient Name</span>
-            <input v-model="issueForm.recipientName" class="quiz-input" type="text" placeholder="Nama peserta" />
+            <span class="quiz-input-label">Recipient User</span>
+            <input v-model.trim="recipientSearch" class="quiz-input" type="search" placeholder="Search user name/email..." />
+          </label>
+          <label class="quiz-input-group">
+            <span class="quiz-input-label">Select User Login</span>
+            <select v-model="issueForm.recipientUserId" class="quiz-input">
+              <option value="">Pilih user aktif</option>
+              <option v-for="user in filteredRecipients" :key="user.id" :value="user.id">
+                {{ user.name }} · {{ user.email }} · {{ user.role }}
+              </option>
+            </select>
+            <small v-if="!filteredRecipients.length" class="muted">Tidak ada user aktif yang cocok dengan pencarian.</small>
           </label>
           <label class="quiz-input-group">
             <span class="quiz-input-label">Recipient Email</span>
-            <input v-model="issueForm.recipientEmail" class="quiz-input" type="email" placeholder="email@domain.com" />
+            <input :value="selectedRecipient?.email || '-'" class="quiz-input" type="text" readonly />
           </label>
           <label class="quiz-input-group">
             <span class="quiz-input-label">Score (optional)</span>
@@ -172,9 +205,33 @@
           </label>
           <div class="quiz-input-group cert-issue-actions">
             <span class="quiz-input-label">Action</span>
-            <button class="primary-btn" type="submit" :disabled="!editor.id">Issue Certificate</button>
+            <button class="primary-btn" type="submit" :disabled="!editor.id || !issueForm.recipientUserId">Issue Certificate</button>
           </div>
         </form>
+      </section>
+
+      <section class="quiz-editor-section">
+        <div class="quiz-editor-section-head">
+          <h4>Bulk Issue</h4>
+          <span class="muted cert-schema-text">{{ bulkRecipientIds.length }} selected</span>
+        </div>
+        <div class="form-grid compact quiz-admin-form">
+          <label class="full quiz-input-group">
+            <span class="quiz-input-label">Search Recipients</span>
+            <input v-model.trim="bulkSearch" class="quiz-input" type="search" placeholder="Cari nama/email user..." />
+          </label>
+        </div>
+        <div class="cert-bulk-actions">
+          <button class="ghost-btn" type="button" @click="selectAllFilteredRecipients">Select All Filtered</button>
+          <button class="ghost-btn" type="button" @click="clearBulkRecipients">Clear</button>
+          <button class="primary-btn" type="button" :disabled="!editor.id || !bulkRecipientIds.length" @click="issueBulkCertificates">Issue Bulk</button>
+        </div>
+        <div class="cert-recipient-grid">
+          <label v-for="user in filteredBulkRecipients" :key="`bulk-${user.id}`" class="cert-recipient-item">
+            <input type="checkbox" :value="user.id" v-model="bulkRecipientIds" />
+            <span>{{ user.name }} · {{ user.email }}</span>
+          </label>
+        </div>
       </section>
     </article>
 
@@ -207,13 +264,18 @@
               <td>{{ item.courseTitle }}</td>
               <td>{{ item.recipientName }}</td>
               <td>{{ formatDate(item.issuedAt) }}</td>
-              <td><span class="pill">{{ item.status }}</span></td>
+              <td>
+                <span class="pill">{{ item.status }}</span>
+                <small v-if="item.status === 'revoked' && item.revokedReason" class="muted" style="display: block; margin-top: 4px;">
+                  {{ item.revokedReason }}
+                </small>
+              </td>
               <td>
                 <div class="cert-actions-grid">
                   <button class="ghost-btn" type="button" @click="openVerifyPage(item)">Verify</button>
                   <button class="ghost-btn" type="button" @click="openQrPreview(item)">QR</button>
                   <button class="ghost-btn" type="button" @click="downloadCertificatePdf(item)">PDF</button>
-                  <button class="ghost-btn danger-btn" type="button" :disabled="item.status === 'revoked'" @click="revokeIssuance(item.id)">
+                  <button class="ghost-btn danger-btn" type="button" :disabled="item.status === 'revoked'" @click="openRevokeModal(item)">
                     Revoke
                   </button>
                 </div>
@@ -226,6 +288,33 @@
         </table>
       </div>
     </article>
+
+    <div v-if="revokeModal.open" class="modal-overlay" @click.self="closeRevokeModal">
+      <article class="modal-card" role="dialog" aria-modal="true" aria-label="Revoke certificate">
+        <h3>Revoke Certificate</h3>
+        <p class="muted">Certificate <strong>{{ revokeModal.certificateNo }}</strong> ({{ revokeModal.recipientName }}) akan di-revoke.</p>
+        <form class="form-grid compact quiz-admin-form" @submit.prevent="confirmRevoke">
+          <label class="full quiz-input-group">
+            <span class="quiz-input-label">Alasan Revoke (wajib)</span>
+            <textarea
+              v-model.trim="revokeModal.reason"
+              class="quiz-input"
+              rows="3"
+              minlength="3"
+              maxlength="240"
+              placeholder="Contoh: duplicate issuance / data correction"
+              required
+            ></textarea>
+          </label>
+          <div class="table-actions">
+            <button class="ghost-btn" type="button" @click="closeRevokeModal">Cancel</button>
+            <button class="ghost-btn danger-btn" type="submit" :disabled="revokeModal.loading || revokeModal.reason.length < 3">
+              {{ revokeModal.loading ? 'Revoking...' : 'Confirm Revoke' }}
+            </button>
+          </div>
+        </form>
+      </article>
+    </div>
   </section>
 </template>
 
@@ -236,6 +325,7 @@ import { storeToRefs } from 'pinia'
 import { apiClient } from '../services/api/client'
 import { useCoursePlayerStore } from '../stores/coursePlayer'
 import { useToastStore } from '../stores/toast'
+import { broadcastProfileRefresh } from '../utils/profileSync'
 
 const router = useRouter()
 const toastStore = useToastStore()
@@ -250,11 +340,23 @@ const sortKey = ref('updatedAt')
 const templates = ref([])
 const issuanceLog = ref([])
 const storeStats = ref({ schemaVersion: 2, templates: 0, issuances: 0 })
+const recipients = ref([])
+const recipientSearch = ref('')
+const bulkSearch = ref('')
+const bulkRecipientIds = ref([])
+const recipientImportInput = ref(null)
 
 const issueForm = ref({
-  recipientName: '',
-  recipientEmail: '',
+  recipientUserId: '',
   score: null,
+})
+const revokeModal = ref({
+  open: false,
+  issuanceId: '',
+  certificateNo: '',
+  recipientName: '',
+  reason: '',
+  loading: false,
 })
 
 const createBlankTemplate = () => ({
@@ -277,6 +379,10 @@ const createBlankTemplate = () => ({
 const editor = ref(createBlankTemplate())
 
 const courseOptions = computed(() => courses.value || [])
+const isPublishedLocked = computed(() => {
+  const current = templates.value.find((item) => item.id === editor.value.id)
+  return Boolean(current && current.status === 'published')
+})
 
 const filteredTemplates = computed(() => {
   const keyword = String(searchKeyword.value || '').trim().toLowerCase()
@@ -295,6 +401,43 @@ const filteredTemplates = computed(() => {
       String(findCourseTitle(item.courseId) || '').toLowerCase().includes(keyword)
     )
   })
+})
+
+const filteredRecipients = computed(() => {
+  const keyword = String(recipientSearch.value || '').trim().toLowerCase()
+  if (!keyword) return recipients.value
+  return recipients.value.filter((item) => {
+    return (
+      String(item.name || '').toLowerCase().includes(keyword) ||
+      String(item.email || '').toLowerCase().includes(keyword) ||
+      String(item.role || '').toLowerCase().includes(keyword)
+    )
+  })
+})
+
+const selectedRecipient = computed(() => recipients.value.find((item) => item.id === issueForm.value.recipientUserId) || null)
+const filteredBulkRecipients = computed(() => {
+  const keyword = String(bulkSearch.value || '').trim().toLowerCase()
+  if (!keyword) return recipients.value
+  return recipients.value.filter((item) => {
+    return String(item.name || '').toLowerCase().includes(keyword) || String(item.email || '').toLowerCase().includes(keyword)
+  })
+})
+const certKpis = computed(() => {
+  const issued = issuanceLog.value.filter((item) => item.status !== 'revoked')
+  const revoked = issuanceLog.value.filter((item) => item.status === 'revoked')
+  const byCourse = issued.reduce((acc, item) => {
+    const key = String(item.courseTitle || '-')
+    acc.set(key, (acc.get(key) || 0) + 1)
+    return acc
+  }, new Map())
+  const top = [...byCourse.entries()].sort((a, b) => b[1] - a[1])[0]
+  return {
+    totalIssued: issued.length,
+    revokedRate: issuanceLog.value.length ? Math.round((revoked.length / issuanceLog.value.length) * 100) : 0,
+    publishedTemplates: templates.value.filter((item) => item.status === 'published').length,
+    topCourse: top ? `${top[0]} (${top[1]})` : '-',
+  }
 })
 
 const findCourseTitle = (courseId) => {
@@ -352,6 +495,14 @@ const saveTemplate = async () => {
     toastStore.push({ type: 'error', title: 'Template belum valid', message: 'Course wajib dipilih.' })
     return
   }
+  if (isPublishedLocked.value && payload.status !== 'archived') {
+    toastStore.push({
+      type: 'error',
+      title: 'Template terkunci',
+      message: 'Template published tidak bisa diedit langsung. Duplicate template atau ubah status ke archived.',
+    })
+    return
+  }
   try {
     const saved = await apiClient.certificates.saveTemplate(payload)
     templates.value = templates.value.some((item) => item.id === saved.id)
@@ -362,6 +513,100 @@ const saveTemplate = async () => {
     toastStore.push({ type: 'success', title: 'Template tersimpan', message: 'Certificate template berhasil disimpan.' })
   } catch (error) {
     toastStore.push({ type: 'error', title: 'Save gagal', message: error?.message || 'Terjadi kesalahan saat simpan.' })
+  }
+}
+
+const openRecipientImport = () => {
+  recipientImportInput.value?.click()
+}
+
+const onImportRecipientFile = async (event) => {
+  const file = event?.target?.files?.[0]
+  if (!file) return
+  try {
+    const text = await file.text()
+    const lines = text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+    if (!lines.length) throw new Error('File kosong.')
+    const lookup = new Map(recipients.value.map((item) => [item.id.toLowerCase(), item]))
+    recipients.value.forEach((item) => {
+      lookup.set(String(item.email || '').toLowerCase(), item)
+    })
+    const selected = new Set(bulkRecipientIds.value)
+    lines.forEach((line) => {
+      const cols = line.split(',').map((v) => v.trim().replace(/^\"|\"$/g, ''))
+      cols.forEach((token) => {
+        const match = lookup.get(String(token || '').toLowerCase())
+        if (match) selected.add(match.id)
+      })
+    })
+    bulkRecipientIds.value = [...selected]
+    toastStore.push({ type: 'success', title: 'Recipients imported', message: `${bulkRecipientIds.value.length} recipient terpilih.` })
+  } catch (error) {
+    toastStore.push({ type: 'error', title: 'Import gagal', message: error?.message || 'CSV tidak valid.' })
+  } finally {
+    if (event?.target) {
+      event.target.value = ''
+    }
+  }
+}
+
+const exportIssuanceCsv = async () => {
+  try {
+    const csv = await apiClient.certificates.exportIssuanceCsv()
+    if (typeof window === 'undefined') return
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `certificate-issuances-${new Date().toISOString().slice(0, 10)}.csv`
+    anchor.click()
+    URL.revokeObjectURL(url)
+  } catch (error) {
+    toastStore.push({ type: 'error', title: 'Export gagal', message: error?.message || 'Tidak bisa export CSV.' })
+  }
+}
+
+const selectAllFilteredRecipients = () => {
+  const selected = new Set(bulkRecipientIds.value)
+  filteredBulkRecipients.value.forEach((item) => selected.add(item.id))
+  bulkRecipientIds.value = [...selected]
+}
+
+const clearBulkRecipients = () => {
+  bulkRecipientIds.value = []
+}
+
+const issueBulkCertificates = async () => {
+  if (!editor.value.id) {
+    toastStore.push({ type: 'error', title: 'Template belum dipilih', message: 'Pilih template dulu sebelum bulk issue.' })
+    return
+  }
+  if (!bulkRecipientIds.value.length) {
+    toastStore.push({ type: 'error', title: 'Recipient belum dipilih', message: 'Pilih minimal 1 user untuk bulk issue.' })
+    return
+  }
+  try {
+    const result = await apiClient.certificates.issueBulk({
+      templateId: editor.value.id,
+      courseId: editor.value.courseId,
+      recipientUserIds: [...new Set(bulkRecipientIds.value.map((id) => String(id || '').trim()).filter(Boolean))],
+      score: Number.isFinite(Number(issueForm.value.score)) ? Number(issueForm.value.score) : null,
+    })
+    const items = Array.isArray(result?.items) ? result.items : []
+    issuanceLog.value = [...items, ...issuanceLog.value]
+    bulkRecipientIds.value = []
+    await reloadIssuanceAndStats()
+    broadcastProfileRefresh({ source: 'certificate-management', reason: 'issue-bulk' })
+    toastStore.push({
+      type: 'success',
+      title: 'Bulk issue berhasil',
+      message: `${Number(result?.total || items.length || 0)} certificate dibuat.`,
+    })
+  } catch (error) {
+    toastStore.push({ type: 'error', title: 'Bulk issue gagal', message: error?.message || 'Terjadi kesalahan saat bulk issue.' })
   }
 }
 
@@ -384,34 +629,74 @@ const issueCertificate = async () => {
     toastStore.push({ type: 'error', title: 'Template belum dipilih', message: 'Pilih template dulu sebelum issue.' })
     return
   }
+  if (!issueForm.value.recipientUserId) {
+    toastStore.push({ type: 'error', title: 'Recipient wajib dipilih', message: 'Pilih user login sebagai penerima certificate.' })
+    return
+  }
   try {
     const issued = await apiClient.certificates.issue({
       templateId: editor.value.id,
       courseId: editor.value.courseId,
-      recipientName: issueForm.value.recipientName,
-      recipientEmail: issueForm.value.recipientEmail,
+      recipientUserId: issueForm.value.recipientUserId,
       score: Number.isFinite(Number(issueForm.value.score)) ? Number(issueForm.value.score) : null,
     })
     issuanceLog.value = [issued, ...issuanceLog.value]
     issueForm.value = {
-      recipientName: '',
-      recipientEmail: '',
+      recipientUserId: '',
       score: null,
     }
+    recipientSearch.value = ''
     await reloadIssuanceAndStats()
+    broadcastProfileRefresh({ source: 'certificate-management', reason: 'issue' })
     toastStore.push({ type: 'success', title: 'Certificate issued', message: `No: ${issued.certificateNo}` })
   } catch (error) {
     toastStore.push({ type: 'error', title: 'Issue gagal', message: error?.message || 'Terjadi kesalahan saat issue.' })
   }
 }
 
-const revokeIssuance = async (id) => {
+const openRevokeModal = (item) => {
+  const id = String(item?.id || '').trim()
+  if (!id) return
+  revokeModal.value = {
+    open: true,
+    issuanceId: id,
+    certificateNo: String(item?.certificateNo || '-'),
+    recipientName: String(item?.recipientName || '-'),
+    reason: `manual revoke ${String(item?.certificateNo || '').trim()}`.trim(),
+    loading: false,
+  }
+}
+
+const closeRevokeModal = () => {
+  if (revokeModal.value.loading) return
+  revokeModal.value = {
+    open: false,
+    issuanceId: '',
+    certificateNo: '',
+    recipientName: '',
+    reason: '',
+    loading: false,
+  }
+}
+
+const confirmRevoke = async () => {
+  const id = String(revokeModal.value.issuanceId || '').trim()
+  const reason = String(revokeModal.value.reason || '').trim()
+  if (!id) return
+  if (reason.length < 3) {
+    toastStore.push({ type: 'error', title: 'Revoke dibatalkan', message: 'Alasan revoke minimal 3 karakter.' })
+    return
+  }
+  revokeModal.value.loading = true
   try {
-    const revoked = await apiClient.certificates.revoke(id, { reason: 'manual revoke from management' })
+    const revoked = await apiClient.certificates.revoke(id, { reason })
     issuanceLog.value = issuanceLog.value.map((item) => (item.id === id ? revoked : item))
+    broadcastProfileRefresh({ source: 'certificate-management', reason: 'revoke' })
     toastStore.push({ type: 'info', title: 'Issuance revoked', message: revoked.certificateNo })
+    closeRevokeModal()
   } catch (error) {
     toastStore.push({ type: 'error', title: 'Revoke gagal', message: error?.message || 'Terjadi kesalahan saat revoke.' })
+    revokeModal.value.loading = false
   }
 }
 
@@ -517,6 +802,11 @@ const loadTemplates = async () => {
   templates.value = Array.isArray(rows) ? rows : []
 }
 
+const loadRecipients = async () => {
+  const rows = await apiClient.certificates.listRecipients()
+  recipients.value = Array.isArray(rows) ? rows : []
+}
+
 const reloadIssuanceAndStats = async () => {
   const [issues, stats] = await Promise.all([
     apiClient.certificates.listIssuance(400),
@@ -534,6 +824,7 @@ onMounted(async () => {
   }
 
   try {
+    await loadRecipients()
     await loadTemplates()
     await reloadIssuanceAndStats()
     if (templates.value.length) {

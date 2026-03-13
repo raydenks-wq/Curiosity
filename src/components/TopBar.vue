@@ -26,16 +26,19 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useAuthStore } from '../stores/auth'
 import { useProfileStore } from '../stores/profile'
+import { listenProfileRefresh } from '../utils/profileSync'
 
 const ranges = ['Today', 'Week', 'Month']
 const selectedRange = ref('Week')
 const authStore = useAuthStore()
 const profileStore = useProfileStore()
 const { profile } = storeToRefs(profileStore)
+let profileRefreshTimer = null
+let stopProfileRefreshListener = null
 
 const displayName = computed(() => {
   const authName = String(authStore.user?.name || '').trim()
@@ -46,5 +49,25 @@ const displayName = computed(() => {
 onMounted(() => {
   profileStore.load().catch(() => {})
   profileStore.syncFromAuthUser(authStore.user)
+  stopProfileRefreshListener = listenProfileRefresh(() => {
+    if (!authStore.isAuthenticated) return
+    profileStore.refresh().catch(() => {})
+  })
+  profileRefreshTimer = window.setInterval(() => {
+    if (document.visibilityState !== 'visible') return
+    if (!authStore.isAuthenticated) return
+    profileStore.refresh().catch(() => {})
+  }, 30000)
+})
+
+onBeforeUnmount(() => {
+  if (profileRefreshTimer) {
+    clearInterval(profileRefreshTimer)
+    profileRefreshTimer = null
+  }
+  if (stopProfileRefreshListener) {
+    stopProfileRefreshListener()
+    stopProfileRefreshListener = null
+  }
 })
 </script>
