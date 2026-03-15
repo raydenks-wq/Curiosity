@@ -52,8 +52,8 @@ export const useQuizManagementStore = defineStore('quizManagement', {
   }),
 
   actions: {
-    async load() {
-      if (this.loaded) return
+    async load(force = false) {
+      if (this.loaded && !force) return
       this.isLoading = true
       try {
         const [quizzes, courseCards] = await Promise.all([apiClient.quiz.list(), apiClient.courses.listCourses()])
@@ -72,6 +72,13 @@ export const useQuizManagementStore = defineStore('quizManagement', {
       } finally {
         this.isLoading = false
       }
+    },
+
+    async refreshQuizzes() {
+      const list = await apiClient.quiz.list()
+      this.quizzes = Array.isArray(list) ? list : []
+      this.loaded = true
+      return this.quizzes
     },
 
     resetEditor() {
@@ -219,7 +226,7 @@ export const useQuizManagementStore = defineStore('quizManagement', {
 
     async deleteQuiz(quizId) {
       await apiClient.quiz.remove(quizId)
-      this.quizzes = this.quizzes.filter((quiz) => quiz.id !== quizId)
+      await this.refreshQuizzes()
       if (this.editor.id === quizId) {
         this.resetEditor()
       }
@@ -227,7 +234,7 @@ export const useQuizManagementStore = defineStore('quizManagement', {
 
     async setQuizStatus(quizId, status) {
       const updated = await apiClient.quiz.updateStatus(quizId, status)
-      this.quizzes = this.quizzes.map((quiz) => (quiz.id === updated.id ? { ...quiz, ...updated } : quiz))
+      await this.refreshQuizzes()
       if (this.editor.id === updated.id) {
         this.editor.status = updated.status
       }
@@ -236,8 +243,8 @@ export const useQuizManagementStore = defineStore('quizManagement', {
 
     async bulkSetStatus(ids, status) {
       const updatedList = await apiClient.quiz.bulkUpdateStatus(ids, status)
+      await this.refreshQuizzes()
       const updatedMap = Object.fromEntries((updatedList || []).map((item) => [item.id, item]))
-      this.quizzes = this.quizzes.map((quiz) => (updatedMap[quiz.id] ? { ...quiz, ...updatedMap[quiz.id] } : quiz))
       if (this.editor.id && updatedMap[this.editor.id]) {
         this.editor.status = updatedMap[this.editor.id].status
       }
@@ -245,13 +252,8 @@ export const useQuizManagementStore = defineStore('quizManagement', {
     },
 
     async bulkDelete(ids) {
-      const remaining = await apiClient.quiz.bulkDelete(ids)
-      if (Array.isArray(remaining)) {
-        this.quizzes = remaining
-      } else {
-        const idSet = new Set(ids)
-        this.quizzes = this.quizzes.filter((quiz) => !idSet.has(quiz.id))
-      }
+      await apiClient.quiz.bulkDelete(ids)
+      await this.refreshQuizzes()
 
       if (ids.includes(this.editor.id)) {
         this.resetEditor()

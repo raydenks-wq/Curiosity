@@ -602,8 +602,8 @@ export const useCourseManagementStore = defineStore('courseManagement', {
       }
     },
 
-    async load() {
-      if (this.loaded) return
+    async load(force = false) {
+      if (this.loaded && !force) return
       this.isLoading = true
       try {
         await this.loadPermissions()
@@ -651,6 +651,22 @@ export const useCourseManagementStore = defineStore('courseManagement', {
       } finally {
         this.isLoading = false
       }
+    },
+
+    async refreshCoursesFromServer(preferredEditorId = this.editor?.id) {
+      if (!apiClient.courseManagement?.list) return this.courses
+      const managed = await apiClient.courseManagement.list()
+      this.courses = this.applyScheduleTransitions((managed || []).map((course, index) => normalizeCourse(course, index)))
+      const nextEditorId = preferredEditorId || this.editor?.id
+      const selected = this.courses.find((course) => course.id === nextEditorId) || this.courses[0] || createBlankCourse()
+      this.editor = clone(selected)
+      if (this.editor.id) {
+        await this.loadRevisions(this.editor.id)
+      } else {
+        this.revisions = []
+      }
+      this.loaded = true
+      return this.courses
     },
 
     applyScheduleTransitions(courses = this.courses) {
@@ -1020,6 +1036,7 @@ export const useCourseManagementStore = defineStore('courseManagement', {
       this.courses = this.courses.filter((course) => course.id !== courseId)
       if (apiClient.courseManagement?.remove) {
         await apiClient.courseManagement.remove(courseId)
+        await this.refreshCoursesFromServer(this.editor.id === courseId ? '' : this.editor.id)
       }
       if (this.editor.id === courseId) {
         this.editor = clone(this.courses[0] || createBlankCourse())
@@ -1110,6 +1127,9 @@ export const useCourseManagementStore = defineStore('courseManagement', {
           ? this.courses.map((course) => (course.id === saved.id ? saved : course))
           : [saved, ...this.courses]
         this.editor = clone(saved)
+        if (apiClient.courseManagement?.list) {
+          await this.refreshCoursesFromServer(saved.id)
+        }
       } catch (error) {
         const conflict = toCourseConflictError(error)
         if (conflict?.latest) {

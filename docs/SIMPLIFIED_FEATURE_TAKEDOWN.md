@@ -8,6 +8,15 @@ Tujuan: menyederhanakan LMS untuk kebutuhan internal perusahaan agar implementas
 - Status: `disabled`
 - Dampak: panel `Permission Matrix` dan `Audit Log` disembunyikan dari halaman User Management pada mode simplified.
 
+2. Certificate Management Advanced Flow
+- Status: `trimmed`
+- Dampak: mode simple hanya menyisakan alur inti:
+  - kelola template dasar
+  - issue manual ke user login
+  - issuance list
+  - verify certificate by code
+- Bagian yang dipangkas dari UI simple: import recipient CSV, bulk issue, revoke action panel.
+
 ## Backlog Takedown (disarankan berikutnya)
 
 1. Course Management Queue + DLQ + Worker Lease
