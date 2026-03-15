@@ -174,6 +174,7 @@ import { useAuthStore } from '../stores/auth'
 import { useNotificationStore } from '../stores/notification'
 import { useProfileStore } from '../stores/profile'
 import { useToastStore } from '../stores/toast'
+import { featureFlags } from '../config/runtimeFlags'
 
 const route = useRoute()
 const router = useRouter()
@@ -216,12 +217,12 @@ const managementNavByRole = {
   instructor: [
     { label: 'Manage Quiz', to: '/management/quizzes', name: 'quiz-admin' },
     { label: 'Manage Course', to: '/management/courses', name: 'course-management' },
-    { label: 'Manage Certificate', to: '/management/certificates', name: 'certificate-management' },
+    ...(featureFlags.certificateManagement ? [{ label: 'Manage Certificate', to: '/management/certificates', name: 'certificate-management' }] : []),
   ],
   admin: [
     { label: 'Manage Quiz', to: '/management/quizzes', name: 'quiz-admin' },
     { label: 'Manage Course', to: '/management/courses', name: 'course-management' },
-    { label: 'Manage Certificate', to: '/management/certificates', name: 'certificate-management' },
+    ...(featureFlags.certificateManagement ? [{ label: 'Manage Certificate', to: '/management/certificates', name: 'certificate-management' }] : []),
     { label: 'User Management', to: '/management/users', name: 'users' },
   ],
 }

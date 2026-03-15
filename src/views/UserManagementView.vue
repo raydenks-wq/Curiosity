@@ -124,68 +124,70 @@
       </div>
     </article>
 
-    <article class="card full-width">
-      <div class="section-header">
-        <h3>Permission Matrix</h3>
-        <button class="primary-btn" type="button" @click="savePermissionMatrix">Save Permissions</button>
-      </div>
-      <div class="user-table-wrap">
-        <table class="user-table">
-          <thead>
-            <tr>
-              <th>Permission</th>
-              <th v-for="level in accessLevels" :key="`head-${level.id}`">{{ level.label }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="(label, key) in permissionLabels" :key="key">
-              <td>{{ label }}</td>
-              <td v-for="level in accessLevels" :key="`${key}-${level.id}`">
-                <input type="checkbox" v-model="permissionMatrix[level.id][key]" :disabled="level.id === 'admin'" />
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </article>
+    <section v-if="showAdvancedAdminPanels" class="full-width user-mgmt-secondary-grid">
+      <article class="card user-mgmt-matrix-card">
+        <div class="section-header">
+          <h3>Permission Matrix</h3>
+          <button class="primary-btn" type="button" @click="savePermissionMatrix">Save Permissions</button>
+        </div>
+        <div class="user-table-wrap">
+          <table class="user-table">
+            <thead>
+              <tr>
+                <th>Permission</th>
+                <th v-for="level in accessLevels" :key="`head-${level.id}`">{{ level.label }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(label, key) in permissionLabels" :key="key">
+                <td>{{ label }}</td>
+                <td v-for="level in accessLevels" :key="`${key}-${level.id}`">
+                  <input type="checkbox" v-model="permissionMatrix[level.id][key]" :disabled="level.id === 'admin'" />
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
 
-    <article class="card full-width">
-      <div class="section-header">
-        <h3>Audit Log</h3>
-        <div class="table-actions">
-          <button class="ghost-btn" type="button" @click="refreshAuditLogs">Refresh</button>
+      <article class="card user-mgmt-audit-card">
+        <div class="section-header">
+          <h3>Audit Log</h3>
+          <div class="table-actions">
+            <button class="ghost-btn" type="button" @click="refreshAuditLogs">Refresh</button>
+          </div>
         </div>
-      </div>
-      <div class="audit-filter-row">
-        <input v-model="auditKeyword" class="search-input" type="search" placeholder="Search actor/target/detail..." />
-        <select v-model="auditActionFilter">
-          <option value="all">All Actions</option>
-          <option value="auth">Auth</option>
-          <option value="users">Users</option>
-          <option value="profile">Profile</option>
-          <option value="system">System</option>
-        </select>
-        <select v-model.number="auditLimit" @change="refreshAuditLogs">
-          <option :value="16">16 latest</option>
-          <option :value="40">40 latest</option>
-          <option :value="80">80 latest</option>
-        </select>
-      </div>
-      <div class="audit-list">
-        <div class="audit-item" v-for="log in auditLogs" :key="log.id">
-          <strong>{{ log.actor }}</strong>
-          <span class="audit-meta-row">
-            <span class="audit-chip" :class="`audit-chip-${actionMeta(log.action).tone}`">
-              {{ actionMeta(log.action).label }}
+        <div class="audit-filter-row">
+          <input v-model="auditKeyword" class="search-input" type="search" placeholder="Search actor/target/detail..." />
+          <select v-model="auditActionFilter">
+            <option value="all">All Actions</option>
+            <option value="auth">Auth</option>
+            <option value="users">Users</option>
+            <option value="profile">Profile</option>
+            <option value="system">System</option>
+          </select>
+          <select v-model.number="auditLimit" @change="refreshAuditLogs">
+            <option :value="16">16 latest</option>
+            <option :value="40">40 latest</option>
+            <option :value="80">80 latest</option>
+          </select>
+        </div>
+        <div class="audit-list">
+          <div class="audit-item" v-for="log in auditLogs" :key="log.id">
+            <strong>{{ log.actor }}</strong>
+            <span class="audit-meta-row">
+              <span class="audit-chip" :class="`audit-chip-${actionMeta(log.action).tone}`">
+                {{ actionMeta(log.action).label }}
+              </span>
+              <span>{{ log.action }} · {{ log.target }}</span>
             </span>
-            <span>{{ log.action }} · {{ log.target }}</span>
-          </span>
-          <p class="muted">{{ log.detail }}</p>
-          <small class="muted">{{ log.timestamp }}</small>
+            <p class="muted">{{ log.detail }}</p>
+            <small class="muted">{{ log.timestamp }}</small>
+          </div>
+          <p v-if="!auditLogs.length" class="muted">Belum ada log untuk filter saat ini.</p>
         </div>
-        <p v-if="!auditLogs.length" class="muted">Belum ada log untuk filter saat ini.</p>
-      </div>
-    </article>
+      </article>
+    </section>
 
     <article v-if="isLoading" class="card full-width profile-loading-card">
       <p class="muted">Loading user accounts...</p>
@@ -261,6 +263,7 @@ import { useToastStore } from '../stores/toast'
 import { useUserManagementStore } from '../stores/userManagement'
 import { useAuditLogStore } from '../stores/auditLog'
 import { useProfileStore } from '../stores/profile'
+import { featureFlags } from '../config/runtimeFlags'
 
 const toastStore = useToastStore()
 const router = useRouter()
@@ -301,6 +304,7 @@ const inviteForm = reactive({
 })
 
 const actorName = computed(() => profile.value?.name || 'Admin')
+const showAdvancedAdminPanels = computed(() => featureFlags.userAdvancedAdmin)
 const roleLabel = (role) => accessLevels.value.find((item) => item.id === role)?.label || role
 
 const filteredUsers = computed(() => {

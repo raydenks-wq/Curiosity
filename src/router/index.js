@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { useProfileStore } from '../stores/profile'
 import { useToastStore } from '../stores/toast'
+import { featureFlags } from '../config/runtimeFlags'
 
 const DashboardView = () => import('../views/DashboardView.vue')
 const CourseCatalogView = () => import('../views/CourseCatalogView.vue')
@@ -55,12 +56,16 @@ const router = createRouter({
       component: CourseManagementView,
       meta: { requiresAuth: true, roles: ['admin', 'instructor'] },
     },
-    {
-      path: '/management/certificates',
-      name: 'certificate-management',
-      component: CertificateManagementView,
-      meta: { requiresAuth: true, roles: ['admin', 'instructor'] },
-    },
+    ...(featureFlags.certificateManagement
+      ? [
+          {
+            path: '/management/certificates',
+            name: 'certificate-management',
+            component: CertificateManagementView,
+            meta: { requiresAuth: true, roles: ['admin', 'instructor'] },
+          },
+        ]
+      : []),
     {
       path: '/verify/certificate/:code?',
       name: 'certificate-verify',

@@ -833,6 +833,23 @@ a {
   grid-column: span 4;
 }
 
+.user-mgmt-secondary-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 0.8rem;
+  align-items: stretch;
+}
+
+.user-mgmt-matrix-card,
+.user-mgmt-audit-card {
+  height: 100%;
+}
+
+.user-mgmt-audit-card {
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+}
+
 .role-grid {
   margin-top: 0.55rem;
   display: grid;
@@ -1718,6 +1735,9 @@ a {
 .audit-list {
   display: grid;
   gap: 0.5rem;
+  overflow: auto;
+  max-height: 360px;
+  padding-right: 0.15rem;
 }
 
 .audit-filter-row {
@@ -3851,6 +3871,10 @@ a {
 
   .summary-card {
     grid-column: 1 / -1;
+  }
+
+  .user-mgmt-secondary-grid {
+    grid-template-columns: 1fr;
   }
 
   .user-filter-row,
