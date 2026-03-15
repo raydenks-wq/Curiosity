@@ -42,6 +42,8 @@ const EMAIL_PROVIDER_MODE = String(process.env.EMAIL_PROVIDER_MODE || 'simulated
 const EMAIL_PROVIDER_WEBHOOK_URL = process.env.EMAIL_PROVIDER_WEBHOOK_URL || ''
 const EMAIL_PROVIDER_API_KEY = process.env.EMAIL_PROVIDER_API_KEY || ''
 const EMAIL_PROVIDER_TIMEOUT_MS = Number(process.env.EMAIL_PROVIDER_TIMEOUT_MS || 5000)
+const LMS_SEED_PROFILE = String(process.env.LMS_SEED_PROFILE || 'full').trim().toLowerCase()
+const IS_SIMPLE_SEED_PROFILE = LMS_SEED_PROFILE === 'simple' || LMS_SEED_PROFILE === 'simplified'
 
 const allowedOrigins = CORS_ORIGIN === '*' ? '*' : CORS_ORIGIN.split(',').map((v) => v.trim()).filter(Boolean)
 
@@ -530,6 +532,46 @@ const defaultQuizCatalog = [
     ],
   },
 ]
+
+const buildSeedCourseCatalog = () => {
+  if (!IS_SIMPLE_SEED_PROFILE) return deepClone(defaultCourseCatalog)
+  const simpleIds = new Set(['ui-101', 'fe-101'])
+  const selected = defaultCourseCatalog.filter((course) => simpleIds.has(String(course?.id || '')))
+  return deepClone(selected.length ? selected : defaultCourseCatalog.slice(0, 2))
+}
+
+const buildSeedQuizCatalog = () => {
+  if (!IS_SIMPLE_SEED_PROFILE) return deepClone(defaultQuizCatalog)
+  const courseIds = new Set(buildSeedCourseCatalog().map((course) => String(course?.id || '')))
+  const selected = defaultQuizCatalog.filter((quiz) => courseIds.has(String(quiz?.courseId || '')))
+  return deepClone(selected.length ? selected : defaultQuizCatalog.slice(0, 2))
+}
+
+const buildSeedCertificateTemplates = (courses = []) => {
+  if (!IS_SIMPLE_SEED_PROFILE) return []
+  const baseCourse = (courses || [])[0] || null
+  if (!baseCourse?.id) return []
+  const nowIso = new Date().toISOString()
+  return [
+    {
+      id: 'certtpl-basic-001',
+      title: 'Certificate of Completion',
+      subtitle: 'Diberikan kepada peserta yang menyelesaikan program',
+      bodyText: 'Peserta dinyatakan menyelesaikan course sesuai standar evaluasi internal.',
+      status: 'published',
+      courseId: String(baseCourse.id),
+      passingScore: 70,
+      validityDays: 365,
+      certificatePrefix: 'CRT',
+      signerName: 'Head of Learning',
+      signerTitle: 'Program Director',
+      autoIssue: false,
+      theme: 'aurora',
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    },
+  ]
+}
 
 const loginSchema = z
   .object({
@@ -1804,6 +1846,9 @@ const nowStamp = () => {
 }
 
 const createDefaultDb = () => {
+  const seededCourses = buildSeedCourseCatalog()
+  const seededQuizzes = buildSeedQuizCatalog()
+  const seededCertificateTemplates = buildSeedCertificateTemplates(seededCourses)
   const profiles = Object.fromEntries(defaultUsers.map((user) => [user.id, createDefaultProfileState(user)]))
   const credentials = Object.fromEntries(
     Object.entries(defaultCredentialsPlain).map(([email, password]) => [normalizeEmail(email), bcrypt.hashSync(password, BCRYPT_ROUNDS)]),
@@ -1814,9 +1859,9 @@ const createDefaultDb = () => {
     credentials,
     permissionMatrix: deepClone(defaultPermissionMatrix),
     courseManagementPermissions: deepClone(defaultCourseManagementPermissionMatrix),
-    courses: deepClone(defaultCourseCatalog),
+    courses: seededCourses,
     courseManagement: [],
-    quizzes: deepClone(defaultQuizCatalog),
+    quizzes: seededQuizzes,
     quizAttempts: {},
     quizSessions: {},
     uploads: {},
@@ -1826,10 +1871,10 @@ const createDefaultDb = () => {
     lessonNotes: {},
     discussions: {},
     certificateSchemaVersion: 2,
-    certificateTemplates: [],
+    certificateTemplates: seededCertificateTemplates,
     certificateIssuances: [],
     certificateCounters: {
-      template: 1,
+      template: Math.max(1, seededCertificateTemplates.length + 1),
       issuance: 1,
       certificate: 1,
     },
@@ -1854,7 +1899,7 @@ const createDefaultDb = () => {
         actor: 'system',
         action: 'seed_data',
         target: 'bootstrap',
-        detail: 'Initial database seeded.',
+        detail: `Initial database seeded (${IS_SIMPLE_SEED_PROFILE ? 'simple' : 'full'} profile).`,
         timestamp: nowStamp(),
       },
     ],
@@ -1870,13 +1915,13 @@ const hydrateDb = (db) => {
   next.users = Array.isArray(next.users) ? next.users : deepClone(defaultUsers)
   next.permissionMatrix = next.permissionMatrix || deepClone(defaultPermissionMatrix)
   next.courseManagementPermissions = normalizeCourseManagementPermissionMatrix(next.courseManagementPermissions || defaultCourseManagementPermissionMatrix)
-  next.courses = Array.isArray(next.courses) ? next.courses : deepClone(defaultCourseCatalog)
+  next.courses = Array.isArray(next.courses) ? next.courses : buildSeedCourseCatalog()
   next.courseManagement = (Array.isArray(next.courseManagement) ? next.courseManagement : []).map((course) => ({
     ...course,
     version: Math.max(1, Number(course?.version || 1)),
     revisions: Array.isArray(course?.revisions) ? course.revisions : [],
   }))
-  next.quizzes = (Array.isArray(next.quizzes) ? next.quizzes : deepClone(defaultQuizCatalog)).map((quiz) => ({
+  next.quizzes = (Array.isArray(next.quizzes) ? next.quizzes : buildSeedQuizCatalog()).map((quiz) => ({
     ...quiz,
     status: quiz.status || 'published',
   }))
