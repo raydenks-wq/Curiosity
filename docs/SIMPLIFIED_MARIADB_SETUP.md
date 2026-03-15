@@ -23,6 +23,8 @@ JWT_SECRET=<secret-kuat>
 JWT_EXPIRES_IN=12h
 CORS_ORIGIN=https://lms.rks.my.id
 BCRYPT_ROUNDS=10
+LMS_SEED_PROFILE=simplified
+LMS_SIMPLIFIED_MODE=true
 
 DB_PROVIDER=mariadb
 DB_MARIA_HOST=127.0.0.1
@@ -46,6 +48,7 @@ Respon normal minimal:
 - `HTTP 200`
 - body berisi `"ok": true`
 - `"provider": "mariadb"`
+- `"simplifiedMode": true`
 
 ## 4) Catatan storage
 
@@ -60,3 +63,5 @@ Respon normal minimal:
 - Course enterprise panels disembunyikan.
 - User advanced admin panels disembunyikan.
 - Certificate advanced flow (mis. export/filter lanjutan) disembunyikan.
+- API queue/DLQ/revision-compliance/telemetry/immutable-audit/webhook-ingest/delivery-log dinonaktifkan.
+- Upload attachment assignment dinonaktifkan (submission tetap bisa via link + notes).

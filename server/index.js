@@ -53,6 +53,14 @@ const EMAIL_PROVIDER_API_KEY = process.env.EMAIL_PROVIDER_API_KEY || ''
 const EMAIL_PROVIDER_TIMEOUT_MS = Number(process.env.EMAIL_PROVIDER_TIMEOUT_MS || 5000)
 const LMS_SEED_PROFILE = String(process.env.LMS_SEED_PROFILE || 'full').trim().toLowerCase()
 const IS_SIMPLE_SEED_PROFILE = LMS_SEED_PROFILE === 'simple' || LMS_SEED_PROFILE === 'simplified'
+const parseEnvBool = (value, fallback = false) => {
+  if (value == null || value === '') return fallback
+  const normalized = String(value).trim().toLowerCase()
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false
+  return fallback
+}
+const LMS_SIMPLIFIED_MODE = parseEnvBool(process.env.LMS_SIMPLIFIED_MODE, IS_SIMPLE_SEED_PROFILE)
 
 const allowedOrigins = CORS_ORIGIN === '*' ? '*' : CORS_ORIGIN.split(',').map((v) => v.trim()).filter(Boolean)
 
@@ -3152,6 +3160,7 @@ app.get('/api/health', async (_req, res) => {
     return res.json({
       ok: true,
       provider,
+      simplifiedMode: LMS_SIMPLIFIED_MODE,
       stateKey: isMariaProvider() ? DB_MARIA_STATE_KEY : 'local-file',
       dbPath: isMariaProvider() ? null : DB_PATH,
       users: Array.isArray(db.users) ? db.users.length : 0,
@@ -3244,6 +3253,14 @@ const requireCoursePermission = (permissionKey) => (req, res, next) => {
     return res.status(403).json({ message: `Course management permission "${permissionKey}" required.` })
   }
   return next()
+}
+
+const disableWhenSimplified = (featureName) => (_req, res, next) => {
+  if (!LMS_SIMPLIFIED_MODE) return next()
+  return res.status(503).json({
+    message: `${featureName} disabled in simplified mode.`,
+    simplifiedMode: true,
+  })
 }
 
 app.post('/api/auth/login', loginLimiter, validateBody(loginSchema), async (req, res) => {
@@ -3607,7 +3624,7 @@ app.post('/api/users/:id/reset-password', requireAuth, requireAdmin, async (req,
   return res.json(req.db.users)
 })
 
-app.post('/api/uploads', requireAuth, validateBody(uploadCreateSchema), async (req, res) => {
+app.post('/api/uploads', requireAuth, disableWhenSimplified('File upload API'), validateBody(uploadCreateSchema), async (req, res) => {
   const parsed = parseDataUrl(req.body.dataUrl)
   if (!parsed) return res.status(400).json({ message: 'Invalid dataUrl payload.' })
   const detectedMime = detectMimeFromBuffer(parsed.buffer)
@@ -3665,7 +3682,7 @@ app.post('/api/uploads', requireAuth, validateBody(uploadCreateSchema), async (r
   })
 })
 
-app.get('/api/uploads/:uploadId/data', requireAuth, async (req, res) => {
+app.get('/api/uploads/:uploadId/data', requireAuth, disableWhenSimplified('File upload API'), async (req, res) => {
   const upload = req.db.uploads?.[req.params.uploadId]
   if (!upload) return res.status(404).json({ message: 'Upload not found.' })
   if (!canAccessUpload(req.db, req.user, upload)) {
@@ -3686,7 +3703,7 @@ app.get('/api/uploads/:uploadId/data', requireAuth, async (req, res) => {
   }
 })
 
-app.get('/api/uploads/:uploadId/url', requireAuth, async (req, res) => {
+app.get('/api/uploads/:uploadId/url', requireAuth, disableWhenSimplified('File upload API'), async (req, res) => {
   const upload = req.db.uploads?.[req.params.uploadId]
   if (!upload) return res.status(404).json({ message: 'Upload not found.' })
   if (!canAccessUpload(req.db, req.user, upload)) {
@@ -4142,13 +4159,13 @@ app.post('/api/course-management', requireAuth, requireCourseManager, validateBo
   return res.json(nextCourse)
 })
 
-app.get('/api/course-management/:id/revisions', requireAuth, requireCourseManager, requireCoursePermission('history'), async (req, res) => {
+app.get('/api/course-management/:id/revisions', requireAuth, disableWhenSimplified('Course revision history'), requireCourseManager, requireCoursePermission('history'), async (req, res) => {
   const target = (req.db.courseManagement || []).find((item) => item.id === req.params.id)
   if (!target) return res.status(404).json({ message: 'Course not found.' })
   return res.json(Array.isArray(target.revisions) ? target.revisions : [])
 })
 
-app.post('/api/course-management/:id/revisions/:revisionId/restore', requireAuth, requireCourseManager, requireCoursePermission('restoreRevision'), async (req, res) => {
+app.post('/api/course-management/:id/revisions/:revisionId/restore', requireAuth, disableWhenSimplified('Course revision restore'), requireCourseManager, requireCoursePermission('restoreRevision'), async (req, res) => {
   const courses = Array.isArray(req.db.courseManagement) ? req.db.courseManagement.slice() : []
   const target = courses.find((item) => item.id === req.params.id)
   if (!target) return res.status(404).json({ message: 'Course not found.' })
@@ -4291,7 +4308,7 @@ app.post('/api/course-management/:id/duplicate', requireAuth, requireCourseManag
   return res.status(201).json(duplicated)
 })
 
-app.get('/api/course-management/:id/compliance-export', requireAuth, requireCourseManager, requireCoursePermission('history'), async (req, res) => {
+app.get('/api/course-management/:id/compliance-export', requireAuth, disableWhenSimplified('Course compliance export'), requireCourseManager, requireCoursePermission('history'), async (req, res) => {
   const target = (req.db.courseManagement || []).find((item) => item.id === req.params.id)
   if (!target) return res.status(404).json({ message: 'Course not found.' })
   const immutableVerify = verifyImmutableAuditChain(req.db.immutableAuditLogs || [])
@@ -4327,17 +4344,17 @@ app.get('/api/course-management/:id/compliance-export', requireAuth, requireCour
   return res.json(bundle)
 })
 
-app.get('/api/course-management/jobs', requireAuth, requireCourseManager, requireCoursePermission('bulk'), async (req, res) => {
+app.get('/api/course-management/jobs', requireAuth, disableWhenSimplified('Course job queue'), requireCourseManager, requireCoursePermission('bulk'), async (req, res) => {
   const rawLimit = Number(req.query.limit || 100)
   const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 500) : 100
   return res.json((req.db.courseManagementJobs || []).slice(0, limit))
 })
 
-app.get('/api/course-management/jobs/worker-lease', requireAuth, requireCourseManager, requireCoursePermission('bulk'), async (req, res) => {
+app.get('/api/course-management/jobs/worker-lease', requireAuth, disableWhenSimplified('Course job queue'), requireCourseManager, requireCoursePermission('bulk'), async (req, res) => {
   return res.json(req.db.jobWorkerLease || null)
 })
 
-app.post('/api/course-management/jobs', requireAuth, requireCourseManager, requireCoursePermission('bulk'), validateBody(courseManagementJobCreateSchema), async (req, res) => {
+app.post('/api/course-management/jobs', requireAuth, disableWhenSimplified('Course job queue'), requireCourseManager, requireCoursePermission('bulk'), validateBody(courseManagementJobCreateSchema), async (req, res) => {
   const item = createCourseManagementJob(req.body, req.user.email)
   req.db.courseManagementJobs = [item, ...(req.db.courseManagementJobs || [])].slice(0, 1000)
   addAuditLog(req.db, {
@@ -4350,7 +4367,7 @@ app.post('/api/course-management/jobs', requireAuth, requireCourseManager, requi
   return res.status(201).json(item)
 })
 
-app.post('/api/course-management/jobs/process-due', requireAuth, requireCourseManager, requireCoursePermission('bulk'), async (req, res) => {
+app.post('/api/course-management/jobs/process-due', requireAuth, disableWhenSimplified('Course job queue'), requireCourseManager, requireCoursePermission('bulk'), async (req, res) => {
   const leaseOwner = `manual:${req.user.id}:${Math.random().toString(36).slice(2, 7)}`
   const lease = acquireCourseJobWorkerLease(req.db, leaseOwner)
   if (!lease.acquired) {
@@ -4373,7 +4390,7 @@ app.post('/api/course-management/jobs/process-due', requireAuth, requireCourseMa
   })
 })
 
-app.post('/api/course-management/jobs/:id/run', requireAuth, requireCourseManager, requireCoursePermission('bulk'), async (req, res) => {
+app.post('/api/course-management/jobs/:id/run', requireAuth, disableWhenSimplified('Course job queue'), requireCourseManager, requireCoursePermission('bulk'), async (req, res) => {
   const jobs = Array.isArray(req.db.courseManagementJobs) ? req.db.courseManagementJobs : []
   const target = jobs.find((item) => item.id === req.params.id)
   if (!target) return res.status(404).json({ message: 'Job not found.' })
@@ -4397,7 +4414,7 @@ app.post('/api/course-management/jobs/:id/run', requireAuth, requireCourseManage
   return res.json(results[0] || { id: target.id, status: target.status })
 })
 
-app.delete('/api/course-management/jobs/:id', requireAuth, requireCourseManager, requireCoursePermission('bulk'), async (req, res) => {
+app.delete('/api/course-management/jobs/:id', requireAuth, disableWhenSimplified('Course job queue'), requireCourseManager, requireCoursePermission('bulk'), async (req, res) => {
   const jobs = Array.isArray(req.db.courseManagementJobs) ? req.db.courseManagementJobs : []
   const exists = jobs.some((item) => item.id === req.params.id)
   if (!exists) return res.status(404).json({ message: 'Job not found.' })
@@ -4406,13 +4423,13 @@ app.delete('/api/course-management/jobs/:id', requireAuth, requireCourseManager,
   return res.status(204).send()
 })
 
-app.get('/api/course-management/jobs/dlq', requireAuth, requireCourseManager, requireCoursePermission('bulk'), async (req, res) => {
+app.get('/api/course-management/jobs/dlq', requireAuth, disableWhenSimplified('Course job dead-letter queue'), requireCourseManager, requireCoursePermission('bulk'), async (req, res) => {
   const rawLimit = Number(req.query.limit || 100)
   const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 500) : 100
   return res.json((req.db.courseManagementJobDlq || []).slice(0, limit))
 })
 
-app.post('/api/course-management/jobs/dlq/:id/redrive', requireAuth, requireCourseManager, requireCoursePermission('bulk'), async (req, res) => {
+app.post('/api/course-management/jobs/dlq/:id/redrive', requireAuth, disableWhenSimplified('Course job dead-letter queue'), requireCourseManager, requireCoursePermission('bulk'), async (req, res) => {
   const dlqItems = Array.isArray(req.db.courseManagementJobDlq) ? req.db.courseManagementJobDlq : []
   const target = dlqItems.find((item) => item.id === req.params.id)
   if (!target) return res.status(404).json({ message: 'DLQ item not found.' })
@@ -4927,6 +4944,9 @@ app.post(
 
     if (!linkUrl && !notes && !attachmentDataUrl && !attachmentId) {
       return res.status(400).json({ message: 'Isi minimal salah satu: link, catatan, atau lampiran.' })
+    }
+    if (LMS_SIMPLIFIED_MODE && (attachmentDataUrl || attachmentId || attachmentName)) {
+      return res.status(400).json({ message: 'Lampiran assignment dinonaktifkan di simplified mode. Gunakan link atau catatan.' })
     }
     if (attachmentDataUrl && !attachmentDataUrl.startsWith('data:')) {
       return res.status(400).json({ message: 'Lampiran tidak valid.' })
@@ -5495,7 +5515,7 @@ app.post('/api/notifications/test-delivery', requireAuth, requireAdmin, validate
   return res.json(item)
 })
 
-app.post('/api/notifications/webhook/ingest', validateBody(webhookIngestSchema), async (req, res) => {
+app.post('/api/notifications/webhook/ingest', disableWhenSimplified('Notification webhook ingest'), validateBody(webhookIngestSchema), async (req, res) => {
   if (!NOTIFICATION_WEBHOOK_SECRET) {
     return res.status(503).json({ message: 'Webhook secret is not configured.' })
   }
@@ -5551,7 +5571,7 @@ app.post('/api/notifications/webhook/ingest', validateBody(webhookIngestSchema),
   return res.status(202).json({ ok: true, receivedAt: item.createdAt })
 })
 
-app.get('/api/notifications/delivery-logs', requireAuth, requireAdmin, async (req, res) => {
+app.get('/api/notifications/delivery-logs', requireAuth, disableWhenSimplified('Notification delivery logs'), requireAdmin, async (req, res) => {
   const rawLimit = Number(req.query.limit || 100)
   const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 500) : 100
   return res.json((req.db.notificationDeliveryLogs || []).slice(0, limit))
@@ -5563,23 +5583,23 @@ app.get('/api/audit-logs', requireAuth, requireAdmin, async (req, res) => {
   return res.json((req.db.auditLogs || []).slice(0, limit))
 })
 
-app.get('/api/audit-logs/immutable', requireAuth, requireAdmin, async (req, res) => {
+app.get('/api/audit-logs/immutable', requireAuth, disableWhenSimplified('Immutable audit logs'), requireAdmin, async (req, res) => {
   const rawLimit = Number(req.query.limit || 100)
   const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 1000) : 100
   return res.json((req.db.immutableAuditLogs || []).slice(0, limit))
 })
 
-app.get('/api/audit-logs/immutable/verify', requireAuth, requireAdmin, async (req, res) => {
+app.get('/api/audit-logs/immutable/verify', requireAuth, disableWhenSimplified('Immutable audit verification'), requireAdmin, async (req, res) => {
   return res.json(verifyImmutableAuditChain(req.db.immutableAuditLogs || []))
 })
 
-app.post('/api/telemetry/events', requireAuth, validateBody(telemetryEventSchema), async (req, res) => {
+app.post('/api/telemetry/events', requireAuth, disableWhenSimplified('Telemetry ingestion'), validateBody(telemetryEventSchema), async (req, res) => {
   addTelemetryEvent(req.db, req.body, req.user)
   await writeDb(req.db)
   return res.status(202).json({ ok: true })
 })
 
-app.get('/api/telemetry/events', requireAuth, requireAdmin, async (req, res) => {
+app.get('/api/telemetry/events', requireAuth, disableWhenSimplified('Telemetry events'), requireAdmin, async (req, res) => {
   const rawLimit = Number(req.query.limit || 100)
   const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 500) : 100
   return res.json((req.db.telemetryEvents || []).slice(0, limit))
@@ -5596,6 +5616,9 @@ const start = async () => {
   const server = app.listen(PORT, () => {
     console.log(`Curiosity API listening on http://localhost:${PORT}/api`)
   })
+  if (LMS_SIMPLIFIED_MODE) {
+    return server
+  }
   const schedulerWorkerId = `scheduler:${process.pid}`
   let jobWorkerBusy = false
   const jobWorkerTimer = setInterval(async () => {
