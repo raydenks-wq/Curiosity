@@ -58,7 +58,7 @@
         </select>
       </div>
 
-      <div class="bulk-row" v-if="selectedIds.length">
+      <div class="bulk-row" v-if="showAdvancedAdminPanels && selectedIds.length">
         <span>{{ selectedIds.length }} user terpilih</span>
         <div class="table-actions">
           <button class="ghost-btn" type="button" @click="runBulkStatus('active')">Activate</button>
@@ -71,7 +71,10 @@
         <table class="user-table">
           <thead>
             <tr>
-              <th><input type="checkbox" :checked="isPageSelected" @change="togglePageSelection" /></th>
+              <th>
+                <input v-if="showAdvancedAdminPanels" type="checkbox" :checked="isPageSelected" @change="togglePageSelection" />
+                <span v-else>#</span>
+              </th>
               <th @click="toggleSort('name')" class="sortable">Name</th>
               <th>Email</th>
               <th @click="toggleSort('role')" class="sortable">Role</th>
@@ -81,9 +84,15 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="user in paginatedUsers" :key="user.id">
+            <tr v-for="(user, index) in paginatedUsers" :key="user.id">
               <td>
-                <input type="checkbox" :checked="selectedIds.includes(user.id)" @change="toggleSelected(user.id)" />
+                <input
+                  v-if="showAdvancedAdminPanels"
+                  type="checkbox"
+                  :checked="selectedIds.includes(user.id)"
+                  @change="toggleSelected(user.id)"
+                />
+                <span v-else>{{ (page - 1) * pageSize + index + 1 }}</span>
               </td>
               <td>{{ user.name }}</td>
               <td>{{ user.email }}</td>

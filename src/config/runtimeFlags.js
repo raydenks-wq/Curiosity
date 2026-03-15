@@ -12,4 +12,7 @@ export const featureFlags = {
   // Certificate tetap aktif di mode simple, kecuali di-disable eksplisit via env.
   certificateManagement: toBool(import.meta.env.VITE_FEATURE_CERTIFICATES, true),
   userAdvancedAdmin: toBool(import.meta.env.VITE_FEATURE_USER_ADVANCED_ADMIN, !isSimplifiedMode),
+  quizBulkManagement: toBool(import.meta.env.VITE_FEATURE_QUIZ_BULK, !isSimplifiedMode),
+  courseEnterprisePanels: toBool(import.meta.env.VITE_FEATURE_COURSE_ENTERPRISE, !isSimplifiedMode),
+  certificateAdvancedFlow: toBool(import.meta.env.VITE_FEATURE_CERTIFICATE_ADVANCED, !isSimplifiedMode),
 }

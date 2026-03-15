@@ -28,7 +28,7 @@
       </div>
       <input ref="importInput" class="hidden-input" type="file" accept="application/json,.json" @change="handleImportFile" />
 
-      <div v-if="selectedIds.length" class="bulk-row">
+      <div v-if="canUseBulkManagement && selectedIds.length" class="bulk-row">
         <span>{{ selectedIds.length }} quiz terpilih</span>
         <div class="table-actions">
           <button class="ghost-btn" type="button" @click="runBulkStatus('published')">Publish selected</button>
@@ -61,7 +61,7 @@
       <div v-if="filteredQuizzes.length" class="pager-row">
         <span>Page {{ page }} / {{ totalPages }}</span>
         <div class="table-actions">
-          <label class="quiz-select-page">
+          <label v-if="canUseBulkManagement" class="quiz-select-page">
             <input type="checkbox" :checked="isPageSelected" @change="togglePageSelection" />
             Select page
           </label>
@@ -307,7 +307,7 @@
       </template>
     </article>
 
-    <Teleport to="body">
+    <Teleport v-if="canUseBulkManagement" to="body">
       <div v-if="isBulkDeleteConfirmOpen" class="modal-overlay" @click.self="isBulkDeleteConfirmOpen = false">
         <article class="modal-card">
           <h3>Konfirmasi Bulk Delete</h3>
@@ -327,6 +327,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useToastStore } from '../stores/toast'
 import { useQuizManagementStore } from '../stores/quizManagement'
+import { featureFlags } from '../config/runtimeFlags'
 
 const toastStore = useToastStore()
 const quizStore = useQuizManagementStore()
@@ -347,6 +348,7 @@ const scoringSectionRef = ref(null)
 const questionsSectionRef = ref(null)
 const activeStep = ref('basic')
 const stepDetailOpen = ref('')
+const canUseBulkManagement = featureFlags.quizBulkManagement
 
 const filteredQuizzes = computed(() =>
   [...quizzes.value]

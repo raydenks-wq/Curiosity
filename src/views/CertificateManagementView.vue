@@ -4,7 +4,7 @@
       <div class="section-header">
         <h2>Certificate Management</h2>
         <div class="table-actions">
-          <button class="ghost-btn" type="button" @click="exportIssuanceCsv">Export CSV</button>
+          <button v-if="showCertificateAdvancedFlow" class="ghost-btn" type="button" @click="exportIssuanceCsv">Export CSV</button>
           <button class="ghost-btn" type="button" @click="createTemplate">New Template</button>
         </div>
       </div>
@@ -25,7 +25,7 @@
             {{ course.title }}
           </option>
         </select>
-        <select v-model="sortKey" class="quiz-input">
+        <select v-if="showCertificateAdvancedFlow" v-model="sortKey" class="quiz-input">
           <option value="updatedAt">Sort: Updated</option>
           <option value="title">Sort: Title</option>
           <option value="status">Sort: Status</option>
@@ -253,6 +253,7 @@ import { apiClient } from '../services/api/client'
 import { useCoursePlayerStore } from '../stores/coursePlayer'
 import { useToastStore } from '../stores/toast'
 import { broadcastProfileRefresh } from '../utils/profileSync'
+import { featureFlags } from '../config/runtimeFlags'
 
 const router = useRouter()
 const toastStore = useToastStore()
@@ -263,6 +264,7 @@ const searchKeyword = ref('')
 const statusFilter = ref('all')
 const courseFilter = ref('all')
 const sortKey = ref('updatedAt')
+const showCertificateAdvancedFlow = featureFlags.certificateAdvancedFlow
 
 const templates = ref([])
 const issuanceLog = ref([])

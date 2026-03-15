@@ -105,17 +105,17 @@
           <button v-if="canPublishCourse" class="ghost-btn" type="button" :disabled="isBulkBusy" @click="runBulkStatus('published')">Publish</button>
           <button class="ghost-btn" type="button" :disabled="isBulkBusy" @click="runBulkStatus('draft')">Draft</button>
           <button class="ghost-btn" type="button" :disabled="isBulkBusy" @click="runBulkStatus('archived')">Archive</button>
-          <button class="ghost-btn" type="button" :disabled="isBulkBusy" @click="runBulkAutoPrerequisite">Auto Prereq</button>
-          <button class="ghost-btn" type="button" :disabled="isBulkBusy" @click="runBulkClearPrerequisite">Clear Prereq</button>
+          <button v-if="canShowCourseEnterprisePanels" class="ghost-btn" type="button" :disabled="isBulkBusy" @click="runBulkAutoPrerequisite">Auto Prereq</button>
+          <button v-if="canShowCourseEnterprisePanels" class="ghost-btn" type="button" :disabled="isBulkBusy" @click="runBulkClearPrerequisite">Clear Prereq</button>
           <button v-if="canImportExportCourse" class="ghost-btn" type="button" @click="exportSelectedJson">Export Selected</button>
           <button class="ghost-btn danger-btn" type="button" :disabled="!canDeleteCourse || isBulkBusy" @click="runBulkDelete">Delete Selected</button>
-          <button v-if="canPublishCourse" class="ghost-btn" type="button" :disabled="isBulkBusy" @click="queueBulkJob('bulk-status', { ids: selectedIds, statusValue: 'published' })">
+          <button v-if="canShowCourseEnterprisePanels && canPublishCourse" class="ghost-btn" type="button" :disabled="isBulkBusy" @click="queueBulkJob('bulk-status', { ids: selectedIds, statusValue: 'published' })">
             Queue Publish
           </button>
-          <button class="ghost-btn" type="button" :disabled="isBulkBusy" @click="queueBulkJob('bulk-auto-prerequisite', { ids: selectedIds })">
+          <button v-if="canShowCourseEnterprisePanels" class="ghost-btn" type="button" :disabled="isBulkBusy" @click="queueBulkJob('bulk-auto-prerequisite', { ids: selectedIds })">
             Queue Auto Prereq
           </button>
-          <button class="ghost-btn danger-btn" type="button" :disabled="!canDeleteCourse || isBulkBusy" @click="queueBulkJob('bulk-delete', { ids: selectedIds })">
+          <button v-if="canShowCourseEnterprisePanels" class="ghost-btn danger-btn" type="button" :disabled="!canDeleteCourse || isBulkBusy" @click="queueBulkJob('bulk-delete', { ids: selectedIds })">
             Queue Delete
           </button>
         </div>
@@ -954,7 +954,7 @@
           </article>
         </section>
 
-        <section v-if="showAdvancedInputs && canBulkCourse" class="quiz-editor-section">
+        <section v-if="showAdvancedInputs && canShowCourseEnterprisePanels && canBulkCourse" class="quiz-editor-section">
           <div class="quiz-editor-section-head">
             <h4>6B. Bulk Job Queue</h4>
           </div>
@@ -1027,7 +1027,7 @@
           </article>
         </section>
 
-        <section v-if="showAdvancedInputs && isAdminRole" class="quiz-editor-section">
+        <section v-if="showAdvancedInputs && canShowCourseEnterprisePanels && isAdminRole" class="quiz-editor-section">
           <div class="quiz-editor-section-head">
             <h4>8. Observability Dashboard</h4>
             <div class="table-actions">
@@ -1086,7 +1086,7 @@
           </article>
         </section>
 
-        <section v-if="showAdvancedInputs && canViewHistory" class="quiz-editor-section">
+        <section v-if="showAdvancedInputs && canShowCourseEnterprisePanels && canViewHistory" class="quiz-editor-section">
           <div class="quiz-editor-section-head">
             <h4>9. Revision Diff Viewer</h4>
           </div>
@@ -1157,7 +1157,7 @@
           </article>
         </section>
 
-        <section v-if="showAdvancedInputs && isAdminRole" class="quiz-editor-section">
+        <section v-if="showAdvancedInputs && canShowCourseEnterprisePanels && isAdminRole" class="quiz-editor-section">
           <div class="quiz-editor-section-head">
             <h4>9B. Compliance & Integrations</h4>
             <div class="table-actions">
@@ -1213,7 +1213,7 @@
           </article>
         </section>
 
-        <section v-if="showAdvancedInputs && canViewHistory" class="quiz-editor-section">
+        <section v-if="showAdvancedInputs && canShowCourseEnterprisePanels && canViewHistory" class="quiz-editor-section">
           <div class="quiz-editor-section-head">
             <h4>10. Author Analytics</h4>
           </div>
@@ -1305,6 +1305,7 @@ import { apiClient } from '../services/api/client'
 import { useCourseManagementStore } from '../stores/courseManagement'
 import { useProfileStore } from '../stores/profile'
 import { useToastStore } from '../stores/toast'
+import { featureFlags, isSimplifiedMode } from '../config/runtimeFlags'
 
 const courseStore = useCourseManagementStore()
 const router = useRouter()
@@ -1320,7 +1321,8 @@ const sortDir = ref('desc')
 const page = ref(1)
 const pageSize = ref(10)
 const isPreviewMode = ref(false)
-const showAdvancedInputs = ref(true)
+const showAdvancedInputs = ref(!isSimplifiedMode)
+const canShowCourseEnterprisePanels = featureFlags.courseEnterprisePanels
 const basicWizardStep = ref(1)
 const draggingModuleIndex = ref(null)
 const draggingLesson = ref(null)

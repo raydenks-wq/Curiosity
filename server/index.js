@@ -6,6 +6,7 @@ import { getSignedUrl as getSignedS3Url } from '@aws-sdk/s3-request-presigner'
 import rateLimit from 'express-rate-limit'
 import helmet from 'helmet'
 import jwt from 'jsonwebtoken'
+import { createPool } from 'mysql2/promise'
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -20,6 +21,14 @@ const UPLOAD_DIR = path.join(DB_DIR, 'uploads')
 const isTestEnv = process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST)
 const defaultDbName = isTestEnv ? `db.test.${process.pid}.json` : 'db.json'
 const DB_PATH = process.env.DB_PATH || path.join(DB_DIR, defaultDbName)
+const DB_PROVIDER = String(process.env.DB_PROVIDER || 'file').trim().toLowerCase()
+const DB_MARIA_HOST = process.env.DB_MARIA_HOST || '127.0.0.1'
+const DB_MARIA_PORT = Number(process.env.DB_MARIA_PORT || 3306)
+const DB_MARIA_USER = process.env.DB_MARIA_USER || ''
+const DB_MARIA_PASSWORD = process.env.DB_MARIA_PASSWORD || ''
+const DB_MARIA_DATABASE = process.env.DB_MARIA_DATABASE || ''
+const DB_MARIA_TABLE = process.env.DB_MARIA_TABLE || 'lms_app_state'
+const DB_MARIA_STATE_KEY = process.env.DB_MARIA_STATE_KEY || 'main'
 
 const PORT = Number(process.env.PORT || 3000)
 const JWT_SECRET = process.env.JWT_SECRET || 'curiosity-dev-secret'
@@ -1987,9 +1996,76 @@ const hydrateDb = (db) => {
   return next
 }
 
+let mariaPool = null
+
+const isMariaProvider = () => DB_PROVIDER === 'mariadb' || DB_PROVIDER === 'mysql'
+
+const ensureMariaConfig = () => {
+  if (!DB_MARIA_USER || !DB_MARIA_DATABASE) {
+    throw new Error('MariaDB config belum lengkap. Isi DB_MARIA_USER dan DB_MARIA_DATABASE.')
+  }
+}
+
+const getMariaPool = () => {
+  ensureMariaConfig()
+  if (mariaPool) return mariaPool
+  mariaPool = createPool({
+    host: DB_MARIA_HOST,
+    port: DB_MARIA_PORT,
+    user: DB_MARIA_USER,
+    password: DB_MARIA_PASSWORD,
+    database: DB_MARIA_DATABASE,
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0,
+    charset: 'utf8mb4',
+  })
+  return mariaPool
+}
+
+const ensureMariaStateTable = async () => {
+  const pool = getMariaPool()
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS \`${DB_MARIA_TABLE}\` (
+      \`state_key\` VARCHAR(64) NOT NULL PRIMARY KEY,
+      \`state_json\` LONGTEXT NOT NULL,
+      \`updated_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `)
+}
+
+const readMariaState = async () => {
+  const pool = getMariaPool()
+  const [rows] = await pool.query(`SELECT state_json FROM \`${DB_MARIA_TABLE}\` WHERE state_key = ? LIMIT 1`, [DB_MARIA_STATE_KEY])
+  const row = Array.isArray(rows) ? rows[0] : null
+  if (!row?.state_json) return null
+  return JSON.parse(String(row.state_json))
+}
+
+const writeMariaState = async (db) => {
+  const pool = getMariaPool()
+  const payload = JSON.stringify(db)
+  await pool.query(
+    `INSERT INTO \`${DB_MARIA_TABLE}\` (state_key, state_json) VALUES (?, ?) ON DUPLICATE KEY UPDATE state_json = VALUES(state_json), updated_at = CURRENT_TIMESTAMP`,
+    [DB_MARIA_STATE_KEY, payload],
+  )
+}
+
 const ensureDb = async () => {
-  await mkdir(DB_DIR, { recursive: true })
   await storageAdapter.ensure()
+  if (isMariaProvider()) {
+    await ensureMariaStateTable()
+    const state = await readMariaState()
+    if (!state || typeof state !== 'object') {
+      await writeMariaState(createDefaultDb())
+      return
+    }
+    const hydrated = hydrateDb(state)
+    await writeMariaState(hydrated)
+    return
+  }
+
+  await mkdir(DB_DIR, { recursive: true })
   try {
     const raw = await readFile(DB_PATH, 'utf-8')
     const parsed = hydrateDb(JSON.parse(raw))
@@ -2001,11 +2077,26 @@ const ensureDb = async () => {
 }
 
 const readDb = async () => {
+  if (isMariaProvider()) {
+    await ensureMariaStateTable()
+    const raw = await readMariaState()
+    if (!raw || typeof raw !== 'object') {
+      const fresh = createDefaultDb()
+      await writeMariaState(fresh)
+      return fresh
+    }
+    return hydrateDb(raw)
+  }
   const raw = await readFile(DB_PATH, 'utf-8')
   return hydrateDb(JSON.parse(raw))
 }
 
 const writeDb = async (db) => {
+  if (isMariaProvider()) {
+    await ensureMariaStateTable()
+    await writeMariaState(db)
+    return
+  }
   await writeFile(DB_PATH, JSON.stringify(db, null, 2), 'utf-8')
 }
 
@@ -3052,6 +3143,29 @@ app.use(
   }),
 )
 app.use(express.json({ limit: '3mb' }))
+
+app.get('/api/health', async (_req, res) => {
+  const provider = isMariaProvider() ? 'mariadb' : 'file'
+  try {
+    await ensureDb()
+    const db = await readDb()
+    return res.json({
+      ok: true,
+      provider,
+      stateKey: isMariaProvider() ? DB_MARIA_STATE_KEY : 'local-file',
+      dbPath: isMariaProvider() ? null : DB_PATH,
+      users: Array.isArray(db.users) ? db.users.length : 0,
+      courses: Array.isArray(db.courses) ? db.courses.length : 0,
+      updatedAt: new Date().toISOString(),
+    })
+  } catch (error) {
+    return res.status(503).json({
+      ok: false,
+      provider,
+      message: error instanceof Error ? error.message : 'Unable to initialize storage.',
+    })
+  }
+})
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
