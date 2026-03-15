@@ -4,7 +4,7 @@
       <div class="section-header">
         <h2>Quiz Management</h2>
         <div class="table-actions">
-          <button class="ghost-btn" type="button" @click="triggerImport">Import JSON</button>
+          <button v-if="showQuizAdvancedTools" class="ghost-btn" type="button" @click="triggerImport">Import JSON</button>
           <button class="primary-btn" type="button" @click="createNewQuiz">New Quiz</button>
         </div>
       </div>
@@ -40,7 +40,8 @@
       <div class="quiz-admin-grid">
         <article v-for="quiz in paginatedQuizzes" :key="quiz.id" class="quiz-admin-item" :class="{ active: editor.id === quiz.id }">
           <label class="quiz-item-check">
-            <input type="checkbox" :checked="selectedIds.includes(quiz.id)" @change="toggleSelected(quiz.id)" />
+            <input v-if="canUseBulkManagement" type="checkbox" :checked="selectedIds.includes(quiz.id)" @change="toggleSelected(quiz.id)" />
+            <span v-else class="muted">•</span>
           </label>
           <button type="button" class="quiz-admin-select" @click="openEditor(quiz.id)">
             <strong>{{ quiz.title }}</strong>
@@ -84,7 +85,7 @@
           <button class="ghost-btn" type="button" @click="mode = mode === 'edit' ? 'preview' : 'edit'">
             {{ mode === 'edit' ? 'Preview' : 'Back to Edit' }}
           </button>
-          <button class="ghost-btn" type="button" @click="exportCurrentQuiz">Export JSON</button>
+          <button v-if="showQuizAdvancedTools" class="ghost-btn" type="button" @click="exportCurrentQuiz">Export JSON</button>
           <button class="ghost-btn" type="button" @click="duplicateCurrent">Duplicate</button>
           <button v-if="editor.id" class="ghost-btn danger-btn" type="button" :disabled="isSaving" @click="removeCurrentQuiz">Delete</button>
           <button class="primary-btn" type="button" :disabled="isSaving || hasValidationError" @click="saveQuiz">
@@ -327,7 +328,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useToastStore } from '../stores/toast'
 import { useQuizManagementStore } from '../stores/quizManagement'
-import { featureFlags } from '../config/runtimeFlags'
+import { featureFlags, isSimplifiedMode } from '../config/runtimeFlags'
 
 const toastStore = useToastStore()
 const quizStore = useQuizManagementStore()
@@ -349,6 +350,7 @@ const questionsSectionRef = ref(null)
 const activeStep = ref('basic')
 const stepDetailOpen = ref('')
 const canUseBulkManagement = featureFlags.quizBulkManagement
+const showQuizAdvancedTools = !isSimplifiedMode
 
 const filteredQuizzes = computed(() =>
   [...quizzes.value]

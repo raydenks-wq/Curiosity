@@ -341,7 +341,7 @@
                 {{ assignmentStatusLabel(myAssignmentSubmission.status) }}
               </span>
             </div>
-            <p class="muted">{{ lessonAssignment?.instructions || 'Kirimkan hasil tugas melalui link atau lampiran file.' }}</p>
+            <p class="muted">{{ lessonAssignment?.instructions || assignmentInstructionFallback }}</p>
             <div class="assignment-window-meta">
               <span>Due: {{ assignmentDueLabel }}</span>
               <span class="assignment-status" :class="isSubmissionClosed ? 'is-revised' : isLateWindow ? 'is-revised' : 'is-graded'">
@@ -366,7 +366,7 @@
                   ></textarea>
                 </label>
 
-                <div class="assignment-upload-row">
+                <div v-if="allowAssignmentAttachment" class="assignment-upload-row">
                   <label class="ghost-btn assignment-upload-btn">
                     Upload Attachment
                     <input ref="assignmentAttachmentInput" type="file" @change="onAssignmentFileChange" />
@@ -374,7 +374,7 @@
                   <button v-if="hasAttachment" class="ghost-btn" type="button" @click="clearAssignmentAttachment">Clear</button>
                 </div>
 
-                <div v-if="hasAttachment" class="assignment-file-pill">
+                <div v-if="allowAssignmentAttachment && hasAttachment" class="assignment-file-pill">
                   <span>{{ assignmentDraft.attachmentName }}</span>
                   <button type="button" @click="downloadDataUrl(assignmentDraft.attachmentDataUrl, assignmentDraft.attachmentName)">Preview</button>
                 </div>
@@ -395,7 +395,7 @@
                   Score: <strong>{{ myAssignmentSubmission.scorePercent }}%</strong>
                 </p>
               </div>
-              <div v-if="myAssignmentSubmission && getSubmissionHistory(myAssignmentSubmission).length" class="assignment-history">
+              <div v-if="showAssignmentRevisionHistory && myAssignmentSubmission && getSubmissionHistory(myAssignmentSubmission).length" class="assignment-history">
                 <h4>Revision History</h4>
                 <ul class="assignment-history-list">
                   <li v-for="entry in getSubmissionHistory(myAssignmentSubmission)" :key="entry.id">
@@ -457,7 +457,7 @@
                 <p v-if="!filteredAssignmentOverviewRows.length" class="muted">Belum ada lesson pada filter module ini.</p>
               </div>
             </div>
-            <div class="assignment-policy-card">
+            <div v-if="showAssignmentBulkDeadlineTools" class="assignment-policy-card">
               <h4>Bulk Deadline Update</h4>
               <div class="assignment-bulk-presets">
                 <button type="button" class="ghost-btn" @click="applyBulkDuePreset(1)">+1 Hari</button>
@@ -542,7 +542,7 @@
 
               <a v-if="submission.linkUrl" :href="submission.linkUrl" class="assignment-link" target="_blank" rel="noreferrer">Open Submission Link</a>
               <button
-                v-if="submission.attachmentDataUrl || submission.attachmentId"
+                v-if="allowAssignmentAttachment && (submission.attachmentDataUrl || submission.attachmentId)"
                 type="button"
                 class="assignment-inline-link"
                 :disabled="downloadingAttachmentId === submission.attachmentId"
@@ -588,7 +588,7 @@
                   {{ assignmentStore.isReviewing ? 'Saving...' : 'Save Review' }}
                 </button>
               </div>
-              <div v-if="getSubmissionHistory(submission).length" class="assignment-history">
+              <div v-if="showAssignmentRevisionHistory && getSubmissionHistory(submission).length" class="assignment-history">
                 <h4>Revision History</h4>
                 <ul class="assignment-history-list">
                   <li v-for="entry in getSubmissionHistory(submission)" :key="entry.id">
@@ -1091,7 +1091,7 @@
               {{ assignmentStatusLabel(myAssignmentSubmission.status) }}
             </span>
           </div>
-          <p class="muted">{{ lessonAssignment?.instructions || 'Kirimkan hasil tugas melalui link atau lampiran file.' }}</p>
+          <p class="muted">{{ lessonAssignment?.instructions || assignmentInstructionFallback }}</p>
           <div class="assignment-window-meta">
             <span>Due: {{ assignmentDueLabel }}</span>
             <span class="assignment-status" :class="isSubmissionClosed ? 'is-revised' : isLateWindow ? 'is-revised' : 'is-graded'">
@@ -1116,7 +1116,7 @@
                 ></textarea>
               </label>
 
-              <div class="assignment-upload-row">
+              <div v-if="allowAssignmentAttachment" class="assignment-upload-row">
                 <label class="ghost-btn assignment-upload-btn">
                   Upload Attachment
                   <input ref="assignmentAttachmentInput" type="file" @change="onAssignmentFileChange" />
@@ -1124,7 +1124,7 @@
                 <button v-if="hasAttachment" class="ghost-btn" type="button" @click="clearAssignmentAttachment">Clear</button>
               </div>
 
-              <div v-if="hasAttachment" class="assignment-file-pill">
+              <div v-if="allowAssignmentAttachment && hasAttachment" class="assignment-file-pill">
                 <span>{{ assignmentDraft.attachmentName }}</span>
                 <button type="button" @click="downloadDataUrl(assignmentDraft.attachmentDataUrl, assignmentDraft.attachmentName)">Preview</button>
               </div>
@@ -1145,7 +1145,7 @@
                 Score: <strong>{{ myAssignmentSubmission.scorePercent }}%</strong>
               </p>
             </div>
-            <div v-if="myAssignmentSubmission && getSubmissionHistory(myAssignmentSubmission).length" class="assignment-history">
+            <div v-if="showAssignmentRevisionHistory && myAssignmentSubmission && getSubmissionHistory(myAssignmentSubmission).length" class="assignment-history">
               <h4>Revision History</h4>
               <ul class="assignment-history-list">
                 <li v-for="entry in getSubmissionHistory(myAssignmentSubmission)" :key="entry.id">
@@ -1207,7 +1207,7 @@
               <p v-if="!filteredAssignmentOverviewRows.length" class="muted">Belum ada lesson pada filter module ini.</p>
             </div>
           </div>
-          <div class="assignment-policy-card">
+          <div v-if="showAssignmentBulkDeadlineTools" class="assignment-policy-card">
             <h4>Bulk Deadline Update</h4>
             <div class="assignment-bulk-presets">
               <button type="button" class="ghost-btn" @click="applyBulkDuePreset(1)">+1 Hari</button>
@@ -1292,7 +1292,7 @@
 
             <a v-if="submission.linkUrl" :href="submission.linkUrl" class="assignment-link" target="_blank" rel="noreferrer">Open Submission Link</a>
             <button
-              v-if="submission.attachmentDataUrl || submission.attachmentId"
+              v-if="allowAssignmentAttachment && (submission.attachmentDataUrl || submission.attachmentId)"
               type="button"
               class="assignment-inline-link"
               :disabled="downloadingAttachmentId === submission.attachmentId"
@@ -1338,7 +1338,7 @@
                 {{ assignmentStore.isReviewing ? 'Saving...' : 'Save Review' }}
               </button>
             </div>
-            <div v-if="getSubmissionHistory(submission).length" class="assignment-history">
+            <div v-if="showAssignmentRevisionHistory && getSubmissionHistory(submission).length" class="assignment-history">
               <h4>Revision History</h4>
               <ul class="assignment-history-list">
                 <li v-for="entry in getSubmissionHistory(submission)" :key="entry.id">
@@ -1483,7 +1483,7 @@
     </article>
   </section>
 
-  <div v-if="compareModalEntry" class="assignment-compare-backdrop" @click.self="closeHistoryCompare">
+  <div v-if="showAssignmentRevisionHistory && compareModalEntry" class="assignment-compare-backdrop" @click.self="closeHistoryCompare">
     <article class="assignment-compare-modal card">
       <div class="assignment-compare-head">
         <div>
@@ -1581,6 +1581,7 @@ import { useCoursePlayerStore } from '../stores/coursePlayer'
 import { useLessonDiscussionStore } from '../stores/lessonDiscussion'
 import { useLessonNotesStore } from '../stores/lessonNotes'
 import { useToastStore } from '../stores/toast'
+import { isSimplifiedMode } from '../config/runtimeFlags'
 
 const route = useRoute()
 const router = useRouter()
@@ -1698,6 +1699,10 @@ const nextLesson = computed(() => currentCourse.value?.nextLesson || null)
 const authUser = computed(() => authStore.user || null)
 const isAssignmentReviewer = computed(() => ['admin', 'instructor'].includes(String(authUser.value?.role || '')))
 const canSubmitAssignment = computed(() => String(authUser.value?.role || '') === 'student')
+const allowAssignmentAttachment = !isSimplifiedMode
+const showAssignmentRevisionHistory = !isSimplifiedMode
+const showAssignmentBulkDeadlineTools = computed(() => !isSimplifiedMode && isAssignmentReviewer.value)
+const assignmentInstructionFallback = computed(() => (allowAssignmentAttachment ? 'Kirimkan hasil tugas melalui link atau lampiran file.' : 'Kirimkan hasil tugas melalui link atau catatan.'))
 const assignmentItems = computed(() => (isAssignmentReviewer.value ? assignmentSubmissions.value : []))
 const filteredAssignmentItems = computed(() => {
   if (assignmentReviewFilter.value === 'all') return assignmentItems.value
@@ -1852,7 +1857,7 @@ const prerequisiteRuleLessonOptions = computed(() =>
 const selectedPrerequisiteModule = computed(
   () => (currentCourse.value?.modules || []).find((module) => module.id === prerequisiteEditorModuleId.value) || null,
 )
-const canConfigurePrerequisite = computed(() => isAssignmentReviewer.value && prerequisiteModuleOptions.value.length > 0)
+const canConfigurePrerequisite = computed(() => !isSimplifiedMode && isAssignmentReviewer.value && prerequisiteModuleOptions.value.length > 0)
 const prerequisiteModuleIndexById = computed(() =>
   Object.fromEntries((currentCourse.value?.modules || []).map((module, index) => [module.id, index])),
 )
@@ -2594,8 +2599,8 @@ const hydrateAssignmentDraft = () => {
   assignmentDraft.value = {
     linkUrl: mine?.linkUrl || '',
     notes: mine?.notes || '',
-    attachmentName: mine?.attachmentName || '',
-    attachmentDataUrl: mine?.attachmentDataUrl || '',
+    attachmentName: allowAssignmentAttachment ? mine?.attachmentName || '' : '',
+    attachmentDataUrl: allowAssignmentAttachment ? mine?.attachmentDataUrl || '' : '',
   }
 }
 
@@ -2780,8 +2785,16 @@ const downloadSubmissionAttachment = async (submission) => {
 
 const submitAssignment = async () => {
   if (!activeLesson.value) return
+  const payload = allowAssignmentAttachment
+    ? { ...assignmentDraft.value }
+    : {
+        linkUrl: assignmentDraft.value.linkUrl,
+        notes: assignmentDraft.value.notes,
+        attachmentName: '',
+        attachmentDataUrl: '',
+      }
   try {
-    await assignmentStore.submit(String(route.params.id), activeLesson.value.id, assignmentDraft.value)
+    await assignmentStore.submit(String(route.params.id), activeLesson.value.id, payload)
     toastStore.push({
       type: 'success',
       title: 'Submission tersimpan',

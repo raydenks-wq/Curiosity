@@ -5,10 +5,10 @@
       <div class="section-header course-mgmt-header">
         <h2>Course Management</h2>
         <div class="table-actions course-mgmt-header-actions">
-          <button v-if="canImportExportCourse" class="ghost-btn" type="button" @click="triggerImport" :disabled="isImporting">
+          <button v-if="showCourseImportExportTools" class="ghost-btn" type="button" @click="triggerImport" :disabled="isImporting">
             {{ isImporting ? 'Importing...' : 'Import JSON' }}
           </button>
-          <button v-if="canImportExportCourse" class="ghost-btn" type="button" @click="exportAllJson">Export All</button>
+          <button v-if="showCourseImportExportTools" class="ghost-btn" type="button" @click="exportAllJson">Export All</button>
           <button v-if="canDuplicateCourse" class="ghost-btn" type="button" @click="duplicateSelected" :disabled="!editor.id">Duplicate</button>
           <button v-if="canCreateCourse" class="primary-btn" type="button" @click="createNewCourse">New Course</button>
         </div>
@@ -23,7 +23,7 @@
         <span class="pill" :class="{ 'pill-danger': !permissions.delete }">delete: {{ permissions.delete ? 'yes' : 'no' }}</span>
       </div>
       <input ref="importInputRef" class="hidden-input" type="file" accept="application/json,.json" @change="handleImportFile" />
-      <article v-if="canImportExportCourse" class="assignment-policy-card course-import-options-card">
+      <article v-if="showCourseImportExportTools" class="assignment-policy-card course-import-options-card">
         <h4>Import Options</h4>
         <div class="cm-lesson-toggle-row">
           <label class="quiz-select-page"><input v-model="importOptions.dryRun" type="checkbox" /> Dry run (tanpa simpan)</label>
@@ -79,7 +79,14 @@
       <div class="course-admin-grid">
         <article v-for="course in paginatedCourses" :key="course.id" class="quiz-admin-item" :class="{ active: editor.id === course.id }">
           <label class="quiz-item-check">
-            <input type="checkbox" :checked="selectedIds.includes(course.id)" :aria-label="`Select course ${course.title || course.id}`" @change="toggleSelected(course.id)" />
+            <input
+              v-if="showCourseBulkActions"
+              type="checkbox"
+              :checked="selectedIds.includes(course.id)"
+              :aria-label="`Select course ${course.title || course.id}`"
+              @change="toggleSelected(course.id)"
+            />
+            <span v-else class="muted">•</span>
           </label>
           <button type="button" class="quiz-admin-select" @click="openEditor(course.id)">
             <strong>{{ course.title }}</strong>
@@ -99,7 +106,7 @@
         </article>
       </div>
 
-      <div v-if="selectedIds.length && canBulkCourse" class="bulk-row">
+      <div v-if="showCourseBulkActions && selectedIds.length" class="bulk-row">
         <span>{{ selectedIds.length }} course terpilih</span>
         <div class="table-actions">
           <button v-if="canPublishCourse" class="ghost-btn" type="button" :disabled="isBulkBusy" @click="runBulkStatus('published')">Publish</button>
@@ -107,7 +114,7 @@
           <button class="ghost-btn" type="button" :disabled="isBulkBusy" @click="runBulkStatus('archived')">Archive</button>
           <button v-if="canShowCourseEnterprisePanels" class="ghost-btn" type="button" :disabled="isBulkBusy" @click="runBulkAutoPrerequisite">Auto Prereq</button>
           <button v-if="canShowCourseEnterprisePanels" class="ghost-btn" type="button" :disabled="isBulkBusy" @click="runBulkClearPrerequisite">Clear Prereq</button>
-          <button v-if="canImportExportCourse" class="ghost-btn" type="button" @click="exportSelectedJson">Export Selected</button>
+          <button v-if="showCourseImportExportTools" class="ghost-btn" type="button" @click="exportSelectedJson">Export Selected</button>
           <button class="ghost-btn danger-btn" type="button" :disabled="!canDeleteCourse || isBulkBusy" @click="runBulkDelete">Delete Selected</button>
           <button v-if="canShowCourseEnterprisePanels && canPublishCourse" class="ghost-btn" type="button" :disabled="isBulkBusy" @click="queueBulkJob('bulk-status', { ids: selectedIds, statusValue: 'published' })">
             Queue Publish
@@ -125,7 +132,7 @@
       <div v-if="filteredCourses.length" class="pager-row course-mgmt-pager">
         <span>Page {{ page }} / {{ totalPages }}</span>
         <div class="table-actions">
-          <label class="quiz-select-page">
+          <label v-if="showCourseBulkActions" class="quiz-select-page">
             <input type="checkbox" :checked="isPageSelected" aria-label="Select all courses on current page" @change="toggleSelectPage" />
             Select page
           </label>
@@ -145,7 +152,7 @@
       <div class="quiz-editor-toolbar">
         <h3>{{ editor.id ? 'Edit Course' : 'Create Course' }}</h3>
         <div class="table-actions quiz-editor-actions">
-          <label class="quiz-select-page">
+          <label v-if="showCourseAdvancedToggle" class="quiz-select-page">
             <input v-model="showAdvancedInputs" type="checkbox" aria-label="Advanced Mode" />
             Advanced Mode
           </label>
@@ -512,7 +519,7 @@
                 {{ isSaving ? 'Saving...' : 'Save Course' }}
               </button>
             </div>
-            <p class="muted">Setelah course tersimpan, aktifkan Advanced untuk mengatur publish workflow, access rules, dan integrasi.</p>
+            <p class="muted">Setelah course tersimpan, course sudah siap dipakai di Course View.</p>
           </article>
         </section>
 
@@ -1479,6 +1486,9 @@ const canScheduleCourse = computed(() => Boolean(permissions.value?.schedule))
 const canDuplicateCourse = computed(() => Boolean(permissions.value?.duplicate))
 const canViewHistory = computed(() => Boolean(permissions.value?.history))
 const canRestoreRevision = computed(() => Boolean(permissions.value?.restoreRevision))
+const showCourseAdvancedToggle = !isSimplifiedMode
+const showCourseBulkActions = computed(() => !isSimplifiedMode && canBulkCourse.value)
+const showCourseImportExportTools = computed(() => !isSimplifiedMode && canImportExportCourse.value)
 const isAdminRole = computed(() => String(profile.value?.accessRole || '').toLowerCase() === 'admin')
 const isPageSelected = computed(() => {
   if (!paginatedCourses.value.length) return false
